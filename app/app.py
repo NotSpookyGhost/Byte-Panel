@@ -600,9 +600,17 @@ def server_action(action):
         success = start_minecraft_server()
         return jsonify({"status": "started" if success else "failed/already running"})
     elif action == "stop":
+        log_path = os.path.join(SERVER_DIR, "console.log")
+        with open(log_path, "a", encoding='utf-8') as f:
+            f.write("[Action] Server stopped.\n")
+            f.flush()
         success = stop_minecraft_server()
         return jsonify({"status": "stopping" if success else "already offline or error"})
     elif action == "restart":
+        log_path = os.path.join(SERVER_DIR, "console.log")
+        with open(log_path, "a", encoding='utf-8') as f:
+            f.write("[Action] Server restarting.\n")
+            f.flush()
         stop_minecraft_server()
         time.sleep(5) 
         start_minecraft_server()
@@ -820,6 +828,17 @@ def handle_command(payload):
         cmd_str = payload.get('command', '') + "\n"
         MINECRAFT_PROCESS.stdin.write(cmd_str)
         MINECRAFT_PROCESS.stdin.flush()
+
+@app.route('/api/command', methods=['POST'])
+def handle_api_command():
+    global MINECRAFT_PROCESS
+    payload = request.get_json() or {}
+    if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
+        cmd_str = payload.get('command', '') + "\n"
+        MINECRAFT_PROCESS.stdin.write(cmd_str)
+        MINECRAFT_PROCESS.stdin.flush()
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error", "message": "Server offline"})
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
