@@ -38,22 +38,189 @@
             <div>Database Registry</div>
         </div>
         <div class="main-content">
-            <div class="card">
-                <h3>Historical Player Connection History</h3>
-                <div style="display:flex; flex-direction:column; margin-top:20px;">
-                    {% for p in players %}
-                    <div class="player-row">
-                        <img class="player-avatar" src="https://crafatar.com/avatars/{{ p.uuid }}?size=32&overlay" alt="skin">
-                        <div style="flex:1;"><strong>{{ p.username }}</strong></div>
-                        <div style="flex:1; color:var(--text-muted);">{{ p.ip }}</div>
-                        <div style="flex:1; color:var(--text-muted);">🌍 {{ p.country }}</div>
-                        <div style="flex:1; text-align:right; font-size:0.9rem;">Last Login: {{ p.last_seen }}</div>
-                    </div>
-                    {% endfor %}
-                </div>
+            <div class="card" style="overflow-x: auto;">
+                <h3 style="margin-top: 0;">Master Player Roster</h3>
+                <table class="roster-table" style="width: 100%; border-collapse: collapse; text-align: left; margin-top: 20px;">
+                    <thead>
+                        <tr style="border-bottom: 2px solid var(--border); color: var(--text-muted);">
+                            <th style="padding: 10px;">Status</th>
+                            <th style="padding: 10px;">Head</th>
+                            <th style="padding: 10px;">Username</th>
+                            <th style="padding: 10px;">UUID</th>
+                            <th style="padding: 10px;">Last Login</th>
+                            <th style="padding: 10px;">Last IP</th>
+                            <th style="padding: 10px;">Country</th>
+                            <th style="padding: 10px; text-align:right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in players %}
+                        <tr class="player-tr" onclick="openAuditModal('{{ p.uuid }}', '{{ p.username }}', '{{ p.online_status }}', '{{ p.last_ip }}')" style="border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.2s;">
+                            <td style="padding: 10px;">
+                                {% if p.online_status %}
+                                <span style="color: #10b981; font-weight: bold;">● Online</span>
+                                {% else %}
+                                <span style="color: var(--text-muted);">○ Offline</span>
+                                {% endif %}
+                                {% if p.ban_status %}
+                                <span style="color: #ef4444; margin-left: 5px;">(Banned)</span>
+                                {% endif %}
+                            </td>
+                            <td style="padding: 10px;">
+                                <img src="https://crafatar.com/avatars/{{ p.uuid }}?size=32&overlay" alt="skin" style="border-radius: 4px; vertical-align: middle;">
+                            </td>
+                            <td style="padding: 10px;"><strong>{{ p.username }}</strong></td>
+                            <td style="padding: 10px; font-family: monospace; color: var(--text-muted); font-size: 0.85rem;">{{ p.uuid }}</td>
+                            <td style="padding: 10px; font-size: 0.9rem;">{{ p.last_seen }}</td>
+                            <td style="padding: 10px; color: var(--text-muted); font-family: monospace;">{{ p.last_ip }}</td>
+                            <td style="padding: 10px;">🌍 {{ p.country }}</td>
+                            <td style="padding: 10px; text-align:right;" onclick="event.stopPropagation();">
+                                <button class="btn btn-restart" style="padding: 5px 10px; font-size: 0.8rem; margin-right: 5px;" onclick="moderatePlayer('kick', '{{ p.username }}')">Kick</button>
+                                <button class="btn btn-stop" style="padding: 5px 10px; font-size: 0.8rem;" onclick="moderatePlayer('ban', '{{ p.username }}', '{{ p.last_ip }}')">Ban</button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
-    <script>function triggerAction(action) { fetch('/api/server/' + action, { method: 'POST' }); }</script>
+    
+    <!-- Security Audit Modal -->
+    <div id="auditModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+        <div class="card" style="width: 800px; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 15px;">
+                <div style="display: flex; align-items: center; gap: 15px;">
+                    <img id="modalHead" src="" alt="skin" style="width: 48px; height: 48px; border-radius: 6px;">
+                    <div>
+                        <h2 id="modalUsername" style="margin: 0; color: var(--text-main);"></h2>
+                        <div id="modalStatus" style="font-size: 0.9rem; margin-top: 5px;"></div>
+                    </div>
+                </div>
+                <button class="btn" onclick="closeAuditModal()" style="background: transparent; color: var(--text-main); border: 1px solid var(--border);">Close</button>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <button class="btn btn-restart" style="flex: 1;" onclick="moderatePlayerModal('kick')">Kick Active Session</button>
+                <button class="btn btn-stop" style="flex: 1;" onclick="moderatePlayerModal('ban')">Execute IP & UUID Ban</button>
+            </div>
+            
+            <h4 style="margin: 0 0 10px 0;">Chronological Login Ledger</h4>
+            <div style="flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 10px; background: var(--bg-main);">
+                <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--border); color: var(--text-muted);">
+                            <th style="padding: 8px;">Timestamp</th>
+                            <th style="padding: 8px;">IP Address</th>
+                            <th style="padding: 8px;">Country</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modalLedgerBody">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+
+    <script>
+        // Inject dynamic hover styles for table rows
+        const style = document.createElement('style');
+        style.innerHTML = `
+            .player-tr:hover { background-color: rgba(255, 255, 255, 0.05); }
+        `;
+        document.head.appendChild(style);
+
+        let currentModalUsername = "";
+        let currentModalIp = "";
+
+        function showToast(message, actionColor) {
+            let container = document.getElementById('toast-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'toast-container';
+                container.style.cssText = 'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 9999; display: flex; flex-direction: column; gap: 10px; align-items: center;';
+                document.body.appendChild(container);
+            }
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `<div class="toast-bar" style="background-color: ${actionColor};"></div><div class="toast-message"><strong>System Action</strong><br><span style="color:var(--text-muted);">${message}</span></div>`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(-100%)';
+                toast.style.transition = 'all 0.3s ease-in';
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+        }
+
+        function moderatePlayer(action, username, ip = "") {
+            fetch('/api/player/' + action, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username, ip: ip })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    showToast(\`Executed \${action.toUpperCase()} on \${username}\`, action === 'ban' ? '#dc2626' : '#ca8a04');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showToast("Error: " + data.message, "#dc2626");
+                }
+            });
+        }
+        
+        function moderatePlayerModal(action) {
+            moderatePlayer(action, currentModalUsername, currentModalIp);
+        }
+
+        function openAuditModal(uuid, username, onlineStr, lastIp) {
+            currentModalUsername = username;
+            currentModalIp = lastIp;
+            
+            document.getElementById('modalHead').src = \`https://crafatar.com/avatars/\${uuid}?size=48&overlay\`;
+            document.getElementById('modalUsername').innerText = username;
+            
+            const isOnline = onlineStr === "1" || onlineStr === "True" || onlineStr === "true";
+            document.getElementById('modalStatus').innerHTML = isOnline 
+                ? '<span style="color: #10b981; font-weight: bold;">● Active Session</span>'
+                : '<span style="color: var(--text-muted);">○ Offline</span>';
+                
+            document.getElementById('auditModal').style.display = 'flex';
+            
+            // Fetch history
+            const tbody = document.getElementById('modalLedgerBody');
+            tbody.innerHTML = '<tr><td colspan="3" style="padding: 10px; text-align: center;">Loading ledger...</td></tr>';
+            
+            fetch(\`/api/player/\${uuid}/history\`)
+                .then(res => res.json())
+                .then(data => {
+                    tbody.innerHTML = '';
+                    if (data.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="3" style="padding: 10px; text-align: center; color: var(--text-muted);">No logs found.</td></tr>';
+                        return;
+                    }
+                    data.forEach(row => {
+                        tbody.innerHTML += \`
+                            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                <td style="padding: 8px; font-size: 0.9rem;">\${row.timestamp}</td>
+                                <td style="padding: 8px; font-family: monospace; color: var(--text-muted);">\${row.ip}</td>
+                                <td style="padding: 8px;">🌍 \${row.country}</td>
+                            </tr>
+                        \`;
+                    });
+                })
+                .catch(err => {
+                    tbody.innerHTML = '<tr><td colspan="3" style="padding: 10px; text-align: center; color: #ef4444;">Failed to load ledger.</td></tr>';
+                });
+        }
+
+        function closeAuditModal() {
+            document.getElementById('auditModal').style.display = 'none';
+        }
+    </script>
 </body>
 </html>
