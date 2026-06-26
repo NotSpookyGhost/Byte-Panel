@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <title>Engine Persistent Logs</title>
+    {% if has_custom.favicon %}
+    <link rel="icon" href="/branding-assets/favicon.ico">
+    {% else %}
+    <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
+    {% endif %}
+</head>
+<body class="theme-{{ config.theme_accent }}">
+    <div class="sidebar">
+        <div class="nav-group">
+            <div class="sidebar-header">
+                {% if has_custom.logo %}
+                <img class="sidebar-logo" src="/branding-assets/logo.png" alt="Logo">
+                {% else %}
+                <img class="sidebar-logo" src="{{ url_for('static', filename='bytedev_logo.png') }}" alt="Default Logo">
+                {% endif %}
+                <h2>{{ config.panel_name }}</h2>
+            </div>
+            <a href="/overview">Overview</a>
+            <a href="/console">Console</a>
+            <a href="/logs" class="active">Logs</a>
+            <a href="/players">Players</a>
+            <a href="/settings">Settings</a>
+        </div>
+        <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
+            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
+            <form action="/logout" method="GET" style="margin: 0;">
+                <button type="submit" class="btn" style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
+            </form>
+        </div>
+    </div>
+    <div class="main-layout">
+        <div class="top-action-bar">
+            <div>Latest Log Reader (Disk File)</div>
+        </div>
+        <div class="main-content">
+            <div class="card">
+                <div id="log-box" class="terminal" style="width: 100%; height: 500px; box-sizing: border-box;"></div>
+                <button class="btn btn-stop" onclick="confirmClearLogs()" style="margin-top: 16px;">Clear Logs</button>
+            </div>
+        </div>
+    </div>
+    <script>
+        function triggerAction(action) { fetch('/api/server/' + action, { method: 'POST' }); }
+        
+        function escapeHTML(str) {
+            return str.replace(/[&<>'"]/g, 
+                tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+            );
+        }
+
+        function parseConsole(text) {
+            if (!text) return "";
+            const lines = text.split('\n');
+            let html = '';
+            for (let i = 0; i < lines.length; i++) {
+                if (i === lines.length - 1 && lines[i] === "") continue; 
+                let safeLine = escapeHTML(lines[i]);
+                let colorClass = "log-info";
+                
+                if (safeLine.includes("ERROR") || safeLine.includes("Exception") || safeLine.includes("FATAL") || safeLine.includes("FAILED") || safeLine.includes("Caused by")) {
+                    colorClass = "log-error";
+                } else if (safeLine.includes("WARN") || safeLine.includes("WARNING") || safeLine.includes("Alert")) {
+                    colorClass = "log-warn";
+                } else if (safeLine.includes("[System]")) {
+                    colorClass = "log-system";
+                } else if (safeLine.includes("[ LOG SESSION:") || safeLine.match(/={10,}/)) {
+                    colorClass = "log-session";
+                }
+                
+                html += `<div class="${colorClass}" style="white-space: pre-wrap; word-wrap: break-word;">${safeLine}</div>`;
+            }
+            return html;
+        }
+
+        const logBox = document.getElementById('log-box');
+        const rawLog = {{ log_content | tojson | safe }};
+        logBox.innerHTML = parseConsole(rawLog);
+        logBox.scrollTop = logBox.scrollHeight;
+
+        function confirmClearLogs() {
+            if (confirm("Are you sure you want to completely clear the server log history? This cannot be undone.")) {
+                fetch('/api/logs/clear', { method: 'POST' })
+                    .then(res => res.json())
+                    .then(data => {
+                        location.reload();
+                    });
+            }
+        }
+    </script>
+</body>
+</html>

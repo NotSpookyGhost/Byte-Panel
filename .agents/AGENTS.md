@@ -1,0 +1,2 @@
+
+- **Version Incrementing Rule**: Whenever you make a change to the project, always increase the version in ersion.txt. The version format is X.YY.ZZ (e.g., 1.04.3). When the third segment reaches 10, the next increase brings it back to 00 and increases the second segment by 1. The same happens with the second segment: when it reaches 10, it resets to 00 and increases the first segment by 1.

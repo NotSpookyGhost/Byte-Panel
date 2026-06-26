@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <title>Server Live Console</title>
+    {% if has_custom.favicon %}
+    <link rel="icon" href="/branding-assets/favicon.ico">
+    {% else %}
+    <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
+    {% endif %}
+</head>
+
+<body class="theme-{{ config.theme_accent }}">
+    <div class="sidebar">
+        <div class="nav-group">
+            <div class="sidebar-header">
+                {% if has_custom.logo %}
+                <img class="sidebar-logo" src="/branding-assets/logo.png" alt="Logo">
+                {% else %}
+                <img class="sidebar-logo" src="{{ url_for('static', filename='bytedev_logo.png') }}" alt="Default Logo">
+                {% endif %}
+                <h2>{{ config.panel_name }}</h2>
+            </div>
+            <a href="/overview">Overview</a>
+            <a href="/console" class="active">Console</a>
+            <a href="/logs">Logs</a>
+            <a href="/players">Players</a>
+            <a href="/settings">Settings</a>
+        </div>
+        <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
+            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
+            <form action="/logout" method="GET" style="margin: 0;">
+                <button type="submit" class="btn" style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
+            </form>
+        </div>
+    </div>
+    <div class="main-layout">
+        <div class="top-action-bar">
+            <div>Terminal Pipeline</div>
+            <div style="display:flex; gap:10px;">
+                <button class="btn btn-start" onclick="triggerAction('start')">Start</button>
+                <button class="btn btn-stop" onclick="triggerAction('stop')">Stop</button>
+                <button class="btn btn-restart" onclick="triggerAction('restart')">Restart</button>
+            </div>
+        </div>
+        <div class="console-container">
+            <h3 style="color: var(--text-main); margin-top: 0;">Live Server Console</h3>
+
+            <textarea id="serverConsole" readonly
+                style="width: 100%; height: 400px; background-color: #000; color: #0f0; font-family: monospace; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+    </textarea>
+        </div>
+
+        <script>
+            function triggerAction(action) { fetch('/api/server/' + action, { method: 'POST' }); }
+            
+            const consoleBox = document.getElementById('serverConsole');
+            let isScrolledToBottom = true;
+
+            // Check if the user has manually scrolled up
+            consoleBox.addEventListener('scroll', function () {
+                isScrolledToBottom = consoleBox.scrollHeight - consoleBox.clientHeight <= consoleBox.scrollTop + 1;
+            });
+
+            function updateConsole() {
+                fetch('/api/console?t=' + Date.now())
+                    .then(response => response.text())
+                    .then(data => {
+                        consoleBox.value = data;
+
+                        // Auto-scroll to the bottom only if the user hasn't scrolled up to read something
+                        if (isScrolledToBottom) {
+                            consoleBox.scrollTop = consoleBox.scrollHeight;
+                        }
+                    })
+                    .catch(err => console.error("Console fetch error:", err));
+            }
+
+            // Refresh the console every 2 seconds
+            setInterval(updateConsole, 2000);
+
+            // Run once immediately on load
+            updateConsole();
+        </script>
+</body>
+
+</html>

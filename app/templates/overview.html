@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <title>Server Overview</title>
+    {% if has_custom.favicon %}
+    <link rel="icon" href="/branding-assets/favicon.ico">
+    {% else %}
+    <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
+    {% endif %}
+</head>
+<body class="theme-{{ config.theme_accent }}">
+    <div class="sidebar">
+        <div class="nav-group">
+            <div class="sidebar-header">
+                {% if has_custom.logo %}
+                <img class="sidebar-logo" src="/branding-assets/logo.png" alt="Logo">
+                {% else %}
+                <img class="sidebar-logo" src="{{ url_for('static', filename='bytedev_logo.png') }}" alt="Default Logo">
+                {% endif %}
+                <h2>{{ config.panel_name }}</h2>
+            </div>
+            <a href="/overview" class="active">Overview</a>
+            <a href="/console">Console</a>
+            <a href="/logs">Logs</a>
+            <a href="/players">Players</a>
+            <a href="/settings">Settings</a>
+        </div>
+        <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
+            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
+            <form action="/logout" method="GET" style="margin: 0;">
+                <button type="submit" class="btn" style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
+            </form>
+        </div>
+    </div>
+    <div class="main-layout">
+        <div class="top-action-bar">
+            <div>System Overview | Status: <strong id="top-status" style="color: var(--text-muted);">Offline</strong></div>
+            <div style="display:flex; gap:10px;">
+                <button class="btn btn-start" onclick="triggerAction('start')">Start</button>
+                <button class="btn btn-stop" onclick="triggerAction('stop')">Stop</button>
+                <button class="btn btn-restart" onclick="triggerAction('restart')">Restart</button>
+            </div>
+        </div>
+        <div class="main-content">
+            <div class="grid-3">
+                <div class="stat-box">
+                    <label>CPU Allocation</label>
+                    <div id="stat-cpu">0.0%</div>
+                    <div style="height: 60px; margin-top: 10px;"><canvas id="cpuChart"></canvas></div>
+                </div>
+                <div class="stat-box">
+                    <label>RAM Consumption <span style="float: right; color: var(--text-muted); font-size: 0.75rem; font-weight: normal; text-transform: none;">Max: {{ config.ram_gb | default(2) }} GB</span></label>
+                    <div id="stat-ram">0 MB</div>
+                    <div style="height: 60px; margin-top: 10px;"><canvas id="ramChart"></canvas></div>
+                </div>
+                <div class="stat-box">
+                    <label>Engine Heartbeat (TPS)</label>
+                    <div id="stat-tps">0.0</div>
+                    <div style="height: 60px; margin-top: 10px;"><canvas id="tpsChart"></canvas></div>
+                </div>
+            </div>
+            <div class="card">
+                <h3>Deployment Summary</h3>
+                <p>Engine Core: <strong>{{ config.server_type | upper }}</strong></p>
+                <p>Engine Target Version: <strong>{{ config.mc_version }}</strong></p>
+                <p>Target Binary Path: <code>{{ config.java_path }}</code></p>
+            </div>
+        </div>
+    </div>
+    <script>
+        function showToast(message, actionColor) {
+            let container = document.getElementById('toast-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'toast-container';
+                container.style.cssText = 'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 9999; display: flex; flex-direction: column; gap: 10px; align-items: center;';
+                document.body.appendChild(container);
+            }
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `<div class="toast-bar" style="background-color: ${actionColor};"></div><div class="toast-message"><strong>System Action</strong><br><span style="color:var(--text-muted);">${message}</span></div>`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(-100%)';
+                toast.style.transition = 'all 0.3s ease-in';
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+        }
+
+        function triggerAction(action) {
+            let colors = { 'start': '#16a34a', 'stop': '#dc2626', 'restart': '#ca8a04' };
+            fetch('/api/server/' + action, { method: 'POST' })
+            .then(res => res.json()).then(data => showToast("Server signal sent: " + data.status, colors[action] || 'var(--accent)'));
+        }
+        let commonChartOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            scales: { x: { display: false }, y: { display: false, min: 0 } },
+            elements: { point: { radius: 0 }, line: { tension: 0.4, borderWidth: 2 } },
+            animation: false
+        };
+
+        let cpuData = Array(20).fill(0);
+        let ramData = Array(20).fill(0);
+        let tpsData = Array(20).fill(0);
+
+        let cpuChart = new Chart(document.getElementById('cpuChart'), {
+            type: 'line',
+            data: { labels: Array(20).fill(''), datasets: [{ data: cpuData, borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', fill: true }] },
+            options: { ...commonChartOptions, scales: { y: { display: false, min: 0, max: 100 } } }
+        });
+
+        let maxRamGB = {{ config.ram_allocation | default(2) }};
+        let maxRamMB = maxRamGB * 1024;
+
+        let ramChart = new Chart(document.getElementById('ramChart'), {
+            type: 'line',
+            data: { labels: Array(20).fill(''), datasets: [{ data: ramData, borderColor: '#0ea5e9', backgroundColor: 'rgba(14, 165, 233, 0.1)', fill: true }] },
+            options: { ...commonChartOptions, scales: { y: { display: false, min: 0, max: maxRamMB } } }
+        });
+
+        let tpsChart = new Chart(document.getElementById('tpsChart'), {
+            type: 'line',
+            data: { labels: Array(20).fill(''), datasets: [{ data: tpsData, borderColor: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.1)', fill: true }] },
+            options: { ...commonChartOptions, scales: { y: { display: false, min: 0, max: 20 } } }
+        });
+
+        function updateStats() {
+            fetch('/api/stats?t=' + Date.now()).then(res => res.json()).then(data => {
+                document.getElementById('stat-cpu').innerText = data.cpu;
+                document.getElementById('stat-ram').innerText = data.ram;
+                document.getElementById('stat-tps').innerText = data.tps;
+                
+                let cVal = parseFloat(data.cpu) || 0;
+                let rVal = parseFloat(data.ram) || 0;
+                let tVal = parseFloat(data.tps) || 0;
+                
+                cpuData.push(cVal); cpuData.shift();
+                ramData.push(rVal); ramData.shift();
+                tpsData.push(tVal); tpsData.shift();
+                
+                cpuChart.update();
+                ramChart.update();
+                tpsChart.update();
+                
+                const topStatus = document.getElementById('top-status');
+                if (topStatus) {
+                    topStatus.innerText = data.status;
+                    if (data.status === 'Online') {
+                        topStatus.style.color = '#10b981';
+                    } else if (data.status === 'Starting' || data.status === 'Shutting Down') {
+                        topStatus.style.color = '#f59e0b';
+                    } else {
+                        topStatus.style.color = '#ef4444';
+                    }
+                }
+            });
+        }
+        setInterval(updateStats, 2000);
+        updateStats();
+    </script>
+</body>
+</html>

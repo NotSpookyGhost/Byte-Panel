@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <title>Historical Players Ledger</title>
+    {% if has_custom.favicon %}
+    <link rel="icon" href="/branding-assets/favicon.ico">
+    {% else %}
+    <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
+    {% endif %}
+</head>
+<body class="theme-{{ config.theme_accent }}">
+    <div class="sidebar">
+        <div class="nav-group">
+            <div class="sidebar-header">
+                {% if has_custom.logo %}
+                <img class="sidebar-logo" src="/branding-assets/logo.png" alt="Logo">
+                {% else %}
+                <img class="sidebar-logo" src="{{ url_for('static', filename='bytedev_logo.png') }}" alt="Default Logo">
+                {% endif %}
+                <h2>{{ config.panel_name }}</h2>
+            </div>
+            <a href="/overview">Overview</a>
+            <a href="/console">Console</a>
+            <a href="/logs">Logs</a>
+            <a href="/players" class="active">Players</a>
+            <a href="/settings">Settings</a>
+        </div>
+        <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
+            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
+            <form action="/logout" method="GET" style="margin: 0;">
+                <button type="submit" class="btn" style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
+            </form>
+        </div>
+    </div>
+    <div class="main-layout">
+        <div class="top-action-bar">
+            <div>Database Registry</div>
+        </div>
+        <div class="main-content">
+            <div class="card">
+                <h3>Historical Player Connection History</h3>
+                <div style="display:flex; flex-direction:column; margin-top:20px;">
+                    {% for p in players %}
+                    <div class="player-row">
+                        <img class="player-avatar" src="https://crafatar.com/avatars/{{ p.uuid }}?size=32&overlay" alt="skin">
+                        <div style="flex:1;"><strong>{{ p.username }}</strong></div>
+                        <div style="flex:1; color:var(--text-muted);">{{ p.ip }}</div>
+                        <div style="flex:1; color:var(--text-muted);">🌍 {{ p.country }}</div>
+                        <div style="flex:1; text-align:right; font-size:0.9rem;">Last Login: {{ p.last_seen }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>function triggerAction(action) { fetch('/api/server/' + action, { method: 'POST' }); }</script>
+</body>
+</html>

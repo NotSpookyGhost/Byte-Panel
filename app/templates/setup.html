@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MC-Panel - Setup</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(rgba(0,0,0,0.5), rgba(0,0,0,0.5)), url('{% if has_custom.bg %}/branding-assets/bg.jpg{% else %}{{ url_for('static', filename='bg.jpg') }}{% endif %}') no-repeat center center fixed;
+            background-size: cover;
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        .setup-container {
+            background-color: var(--bg-panel);
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            width: 100%;
+            max-width: 500px;
+            border: 1px solid var(--border);
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-top: -10px;
+            margin-bottom: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .label-title {
+            color: var(--text-main);
+        }
+
+        .label-value {
+            color: var(--accent-hover);
+            font-weight: 600;
+        }
+
+        select, input[type="text"], input[type="password"], input[type="number"] {
+            width: 100%;
+            padding: 10px 12px;
+            background-color: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-main);
+            font-size: 14px;
+            box-sizing: border-box;
+            transition: border-color 0.2s ease;
+        }
+
+        select:focus, input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        input[type="range"] {
+            width: 100%;
+            margin: 10px 0;
+            appearance: none;
+            background: transparent;
+        }
+
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: var(--input-bg);
+            border-radius: 3px;
+            border: 1px solid var(--border);
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            appearance: none;
+            margin-top: -7px;
+            transition: background 0.15s ease;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            background: var(--accent-hover);
+        }
+
+        .info-note {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 8px;
+            line-height: 1.4;
+        }
+
+        .stage { display: none; }
+        .stage.active { display: block; animation: fadeIn 0.3s forwards; }
+        .stage-title { font-size: 1.25rem; font-weight: bold; margin-bottom: 12px; text-align: center;}
+        .stage-btn { width: 100%; padding: 14px; font-size: 16px; font-weight: bold; cursor: pointer; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-panel); color: var(--text-main); transition: 0.2s; margin-bottom: 12px; box-sizing: border-box; }
+        .stage-btn:hover { background: var(--border); }
+        .stage-btn-primary { background: var(--accent); color: white; border: none; }
+        .stage-btn-primary:hover { background: var(--accent-hover); }
+    </style>
+</head>
+<body>
+    <div class="setup-container">
+        <h2>Server Initialization Engine</h2>
+        <p class="subtitle">Configure core software parameters, hardware thresholds, and environment credentials below.</p>
+        
+        <!-- Stage 1 -->
+        <div id="stage-1" class="stage active">
+            <h3 class="stage-title">Environment Credentials</h3>
+            <form id="admin-form" onsubmit="event.preventDefault(); validateAndGoToStage2();">
+                <div class="form-group">
+                    <label for="admin_username"><span class="label-title">Panel Administrator Username</span></label>
+                    <input type="text" id="admin_username" name="admin_username" value="admin" required>
+                </div>
+                <div class="form-group">
+                    <label for="admin_password"><span class="label-title">Panel Administrator Password</span></label>
+                    <input type="password" id="admin_password" name="admin_password" required>
+                </div>
+                <button type="submit" class="stage-btn stage-btn-primary">Proceed</button>
+            </form>
+        </div>
+
+        <!-- Stage 2 -->
+        <div id="stage-2" class="stage">
+            <h3 class="stage-title">Deployment Strategy</h3>
+            <button class="stage-btn stage-btn-primary" onclick="goToStage3New()">Create New Server</button>
+            <label class="stage-btn" style="text-align: center; display: block;">
+                Import Existing Server ZIP
+                <input type="file" id="import-zip-input" accept=".zip" style="display: none;" onchange="executeImport(this.files[0])">
+            </label>
+            <button type="button" class="stage-btn" onclick="goToStage1()">Back</button>
+        </div>
+
+        <!-- Stage 3 -->
+        <div id="stage-3" class="stage">
+            <h3 class="stage-title">Engine Configuration</h3>
+            <form id="setup-form" onsubmit="event.preventDefault(); executeNewServer();">
+                <div class="form-group">
+                    <label for="versionSelect"><span class="label-title">Target Minecraft Version</span></label>
+                    <select id="versionSelect" name="version" required></select>
+                    <div class="info-note">The deployment engine will dynamically match and inject the verified Java JRE dependencies based on your selection.</div>
+                </div>
+                <div class="form-group">
+                    <label for="engineSelect"><span class="label-title">Server Software Platform</span></label>
+                    <select id="engineSelect" name="server_type" required></select>
+                </div>
+                <div class="form-group">
+                    <label for="ramSlider">
+                        <span class="label-title">Maximum Memory Allocation</span>
+                        <span class="label-value"><span id="ramDisplay">2</span> GB</span>
+                    </label>
+                    <input type="range" id="ramSlider" name="ram_allocation" min="1" max="{{ max_ram }}" value="2" step="1" oninput="document.getElementById('ramDisplay').innerText = this.value">
+                    <div class="info-note">Detected System Maximum: <strong>{{ max_ram }} GB</strong>. Scale up allocation thresholds if initializing resource-heavy modpacks or larger player counts.</div>
+                </div>
+                <button type="button" class="stage-btn" onclick="goToStage2()">Back</button>
+                <button type="submit" class="stage-btn stage-btn-primary">Create Server</button>
+            </form>
+        </div>
+        
+        <!-- Stage 4 -->
+        <div id="stage-4" class="stage">
+            <h3 class="stage-title" id="progress-title">Initializing Engine...</h3>
+            <p id="progress-msg" style="color: var(--text-muted); margin-bottom: 24px; text-align: center; font-size: 14px;">Please wait while the environment is being provisioned.</p>
+            <div style="width: 100%; height: 8px; background-color: #27272a; border-radius: 4px; overflow: hidden; margin-top: 16px;">
+                <div id="progress-fill" style="height: 100%; width: 0%; background-color: var(--accent-emerald); transition: width 0.1s linear;"></div>
+            </div>
+            <p id="progress-percent" style="text-align: right; margin-top: 8px; color: var(--text-muted); font-size: 12px;">0%</p>
+        </div>
+
+    </div>
+    
+    <script>
+        function showModal(title, message, isConfirm = false, showProgress = false, inputs = null) {
+            return new Promise((resolve) => {
+                const overlay = document.createElement('div');
+                overlay.className = 'modal-overlay';
+                
+                let actionsHTML = '';
+                let contentHTML = message;
+                
+                if (inputs) {
+                    contentHTML += `<div style="text-align: left; margin-top: 16px;">`;
+                    inputs.forEach(inp => {
+                        contentHTML += `
+                            <div class="form-group">
+                                <label><span class="label-title">${inp.label}</span></label>
+                                ${inp.type === 'select' ? 
+                                `<select id="${inp.id}">${inp.options.map(o => `<option value="${o}">${o}</option>`).join('')}</select>` : 
+                                `<input type="${inp.type}" id="${inp.id}" value="${inp.default}">`
+                                }
+                            </div>
+                        `;
+                    });
+                    contentHTML += `</div>`;
+                    actionsHTML = `<button id="modal-btn-yes" class="stage-btn stage-btn-primary" style="margin: 0;">Submit</button>`;
+                } else if (isConfirm) {
+                    actionsHTML = `
+                        <button id="modal-btn-no" class="stage-btn" style="margin: 0; background: #3f3f46; color: white;">Cancel</button>
+                        <button id="modal-btn-yes" class="stage-btn stage-btn-primary" style="margin: 0;">Confirm</button>
+                    `;
+                } else if (!showProgress) {
+                    actionsHTML = `<button id="modal-btn-yes" class="stage-btn stage-btn-primary" style="margin: 0;">Okay</button>`;
+                }
+
+                overlay.innerHTML = `
+                    <div class="modal-box">
+                        <div class="modal-title">${title}</div>
+                        <div class="modal-msg">${contentHTML}</div>
+                        <div style="display: flex; gap: 10px;">${actionsHTML}</div>
+                    </div>
+                `;
+                document.body.appendChild(overlay);
+
+                if (inputs) {
+                    document.getElementById('modal-btn-yes').onclick = () => { 
+                        let result = {};
+                        inputs.forEach(inp => result[inp.id] = document.getElementById(inp.id).value);
+                        overlay.remove(); 
+                        resolve(result); 
+                    };
+                } else if (isConfirm) {
+                    document.getElementById('modal-btn-no').onclick = () => { overlay.remove(); resolve(false); };
+                    document.getElementById('modal-btn-yes').onclick = () => { overlay.remove(); resolve(true); };
+                } else if (!showProgress) {
+                    document.getElementById('modal-btn-yes').onclick = () => { overlay.remove(); resolve(true); };
+                }
+            });
+        }
+    
+        let setupMode = null; 
+        let pendingZipFile = null;
+        let admin_u = '';
+        let admin_p = '';
+        
+        function hideAll() { document.querySelectorAll('.stage').forEach(el => el.classList.remove('active')); }
+        
+        function validateAndGoToStage2() {
+            admin_u = document.getElementById('admin_username').value;
+            admin_p = document.getElementById('admin_password').value;
+            if(!admin_u || !admin_p) {
+                alert("Please enter both username and password.");
+                return;
+            }
+            goToStage2();
+        }
+
+        function goToStage1() { hideAll(); document.getElementById('stage-1').classList.add('active'); }
+        
+        function goToStage2() { hideAll(); document.getElementById('stage-2').classList.add('active'); setupMode = null; pendingZipFile = null; }
+        
+        function goToStage3New() { hideAll(); document.getElementById('stage-3').classList.add('active'); setupMode = 'new'; }
+        
+        function executeNewServer() {
+            setupMode = 'new';
+            executeFinalStage();
+        }
+
+        function executeImport(file) { 
+            if(!file) return;
+            pendingZipFile = file;
+            setupMode = 'import';
+            executeFinalStage();
+        }
+        
+        function executeFinalStage() {
+            hideAll(); document.getElementById('stage-4').classList.add('active');
+            
+            if (setupMode === 'new') {
+                document.getElementById('progress-title').innerText = "Building Server";
+                document.getElementById('progress-msg').innerText = "Downloading core dependencies and booting engine...";
+                
+                let p = 0;
+                let int = setInterval(() => {
+                    p += (95 - p) * 0.05;
+                    document.getElementById('progress-fill').style.width = p + '%';
+                    document.getElementById('progress-percent').innerText = Math.round(p) + '%';
+                }, 500);
+                
+                let formData = new FormData();
+                formData.append('version', document.getElementById('versionSelect').value);
+                formData.append('server_type', document.getElementById('engineSelect').value);
+                formData.append('ram_allocation', document.getElementById('ramSlider').value);
+                formData.append('admin_username', admin_u);
+                formData.append('admin_password', admin_p);
+                
+                fetch('/setup', { method: 'POST', body: formData }).then(res => {
+                    clearInterval(int);
+                    document.getElementById('progress-fill').style.width = '100%';
+                    document.getElementById('progress-percent').innerText = '100%';
+                    location.href = "/overview";
+                });
+                
+            } else if (setupMode === 'import') {
+                document.getElementById('progress-title').innerText = "Importing Server";
+                document.getElementById('progress-msg').innerText = "Transmitting ZIP to the ecosystem...";
+                
+                let formData = new FormData();
+                formData.append('import_zip', pendingZipFile);
+                formData.append('admin_user', admin_u);
+                formData.append('admin_pass', admin_p);
+                
+                let xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/import', true);
+                
+                xhr.upload.onprogress = function(e) {
+                    if (e.lengthComputable) {
+                        let percentComplete = (e.loaded / e.total) * 100;
+                        document.getElementById('progress-fill').style.width = percentComplete + '%';
+                        document.getElementById('progress-percent').innerText = Math.round(percentComplete) + '%';
+                        if (percentComplete >= 100) {
+                            document.getElementById('progress-msg').innerText = "Extracting files and linking configurations...";
+                        }
+                    }
+                };
+                
+                xhr.onload = async function() {
+                    if (xhr.status === 200) {
+                        let data = JSON.parse(xhr.responseText);
+                        if (data.missing_engine_info) {
+                            let result = await showModal("Missing Engine Data", "The imported ZIP does not contain a ServerEngineInfo file. Please manually configure the environment:", false, false, [
+                                { label: "Target Version", id: "manual_mc_version", type: "select", options: Object.keys(mcData) },
+                                { label: "Server Platform", id: "manual_server_type", type: "select", options: ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"] },
+                                { label: "RAM (GB)", id: "manual_ram_gb", type: "number", default: 2 }
+                            ]);
+                            
+                            formData.append('manual_mc_version', result.manual_mc_version);
+                            formData.append('manual_server_type', result.manual_server_type);
+                            formData.append('manual_ram_gb', result.manual_ram_gb);
+                            
+                            document.getElementById('progress-msg').innerText = "Configuring backend and rebooting...";
+                            let xhr2 = new XMLHttpRequest();
+                            xhr2.open('POST', '/api/import', true);
+                            xhr2.onload = function() { location.href = "/overview"; };
+                            xhr2.send(formData);
+                            
+                        } else if (data.error) {
+                            alert(data.error); goToStage1();
+                        } else {
+                            location.href = "/overview";
+                        }
+                    } else {
+                        alert("Network error."); goToStage1();
+                    }
+                };
+                xhr.send(formData);
+            }
+        }
+        
+        const mcData = {
+            "26.2": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "26.1.2": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "26.1.1": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "26.1": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.21.11": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.21.5": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.21.4": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.21.3": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.21.1": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.20.6": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.20.4": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.20.2": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.20.1": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.19.4": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.18.2": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.17.1": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.16.5": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
+            "1.12.2": ["Vanilla", "Paper", "Fabric", "Forge"],
+            "1.8.8": ["Vanilla", "Paper", "Forge"]
+        };
+        const versionSelect = document.getElementById('versionSelect');
+        const engineSelect = document.getElementById('engineSelect');
+        for (const version in mcData) {
+            let opt = document.createElement('option');
+            opt.value = version;
+            opt.innerHTML = version;
+            versionSelect.appendChild(opt);
+        }
+        versionSelect.addEventListener('change', function() {
+            const availableEngines = mcData[this.value];
+            const previousSelection = engineSelect.value;
+            engineSelect.innerHTML = '';
+            availableEngines.forEach(engine => {
+                let opt = document.createElement('option');
+                opt.value = engine;
+                opt.innerHTML = engine;
+                engineSelect.appendChild(opt);
+            });
+            if (availableEngines.includes(previousSelection)) engineSelect.value = previousSelection;
+            else engineSelect.value = "Vanilla";
+        });
+        versionSelect.value = "26.2";
+        versionSelect.dispatchEvent(new Event('change'));
+        engineSelect.value = "Vanilla";
+    </script>
+</body>
+</html>
