@@ -47,9 +47,7 @@
         <div class="console-container">
             <h3 style="color: var(--text-main); margin-top: 0;">Live Server Console</h3>
 
-            <textarea id="serverConsole" readonly
-                style="width: 100%; height: 400px; background-color: #000; color: #0f0; font-family: monospace; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
-    </textarea>
+            <div id="serverConsole" class="terminal" style="width: 100%; height: 400px; overflow-y: auto; background-color: #000; color: #fff; font-family: monospace; padding: 10px; border-radius: 6px; border: 1px solid var(--border);"></div>
         </div>
 
         <script>
@@ -62,16 +60,55 @@
             consoleBox.addEventListener('scroll', function () {
                 isScrolledToBottom = consoleBox.scrollHeight - consoleBox.clientHeight <= consoleBox.scrollTop + 1;
             });
+            
+            function escapeHTML(str) {
+                return str.replace(/[&<>'"]/g, 
+                    tag => ({
+                        '&': '&amp;',
+                        '<': '&lt;',
+                        '>': '&gt;',
+                        "'": '&#39;',
+                        '"': '&quot;'
+                    }[tag] || tag)
+                );
+            }
 
+            function parseConsole(text) {
+                if (!text) return "";
+                const lines = text.split('\n');
+                let html = '';
+                for (let i = 0; i < lines.length; i++) {
+                    if (i === lines.length - 1 && lines[i] === "") continue; 
+                    
+                    let safeLine = escapeHTML(lines[i]);
+                    let textColor = "#fff"; // base color white
+                    
+                    if (safeLine.includes("ERROR") || safeLine.includes("Exception") || safeLine.includes("FATAL") || safeLine.includes("FAILED") || safeLine.includes("Caused by")) {
+                        textColor = "#ef4444"; // red
+                    } else if (safeLine.includes("WARN") || safeLine.includes("WARNING") || safeLine.includes("Alert")) {
+                        textColor = "#f59e0b"; // orange/yellow
+                    } else if (safeLine.includes("[System]")) {
+                        textColor = "#3b82f6"; // blue
+                    }
+                    
+                    html += `<div style="color: ${textColor}; white-space: pre-wrap; word-wrap: break-word;">${safeLine}</div>`;
+                }
+                return html;
+            }
+
+            let previousData = "";
             function updateConsole() {
                 fetch('/api/console?t=' + Date.now())
                     .then(response => response.text())
                     .then(data => {
-                        consoleBox.value = data;
+                        if (data !== previousData) {
+                            consoleBox.innerHTML = parseConsole(data);
+                            previousData = data;
 
-                        // Auto-scroll to the bottom only if the user hasn't scrolled up to read something
-                        if (isScrolledToBottom) {
-                            consoleBox.scrollTop = consoleBox.scrollHeight;
+                            // Auto-scroll to the bottom only if the user hasn't scrolled up to read something
+                            if (isScrolledToBottom) {
+                                consoleBox.scrollTop = consoleBox.scrollHeight;
+                            }
                         }
                     })
                     .catch(err => console.error("Console fetch error:", err));
