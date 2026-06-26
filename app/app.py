@@ -829,5 +829,16 @@ def handle_command(payload):
         MINECRAFT_PROCESS.stdin.write(cmd_str)
         MINECRAFT_PROCESS.stdin.flush()
 
+@app.route('/api/command', methods=['POST'])
+def handle_api_command():
+    global MINECRAFT_PROCESS
+    payload = request.get_json() or {}
+    if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
+        cmd_str = payload.get('command', '') + "\n"
+        MINECRAFT_PROCESS.stdin.write(cmd_str)
+        MINECRAFT_PROCESS.stdin.flush()
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error", "message": "Server offline"})
+
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)

@@ -4,7 +4,6 @@
 <head>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <title>Server Live Console</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socketio/4.0.1/socketio.js"></script>
     {% if has_custom.favicon %}
     <link rel="icon" href="/branding-assets/favicon.ico">
     {% else %}
@@ -63,21 +62,28 @@
         </div>
 
         <script>
-            let socket = null;
-            if (typeof io !== 'undefined') {
-                socket = io();
-            } else {
-                console.warn("Socket.IO failed to load.");
-            }
-            
             function sendCommand() {
-                if (!socket) {
-                    showToast("Error: Command system offline.", "#dc2626");
-                    return;
-                }
                 const input = document.getElementById('commandInput');
-                if (input.value.trim() !== '') {
-                    socket.emit('send_command', { command: input.value.trim() });
+                const commandText = input.value.trim();
+                
+                if (commandText !== '') {
+                    fetch('/api/command', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ command: commandText })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'error') {
+                            showToast("Error: " + data.message, "#dc2626");
+                        }
+                    })
+                    .catch(err => {
+                        showToast("Error: Failed to connect to command system.", "#dc2626");
+                    });
+                    
                     input.value = '';
                 }
             }
