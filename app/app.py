@@ -600,9 +600,17 @@ def server_action(action):
         success = start_minecraft_server()
         return jsonify({"status": "started" if success else "failed/already running"})
     elif action == "stop":
+        log_path = os.path.join(SERVER_DIR, "console.log")
+        with open(log_path, "a", encoding='utf-8') as f:
+            f.write("[Action] Server stopped.\n")
+            f.flush()
         success = stop_minecraft_server()
         return jsonify({"status": "stopping" if success else "already offline or error"})
     elif action == "restart":
+        log_path = os.path.join(SERVER_DIR, "console.log")
+        with open(log_path, "a", encoding='utf-8') as f:
+            f.write("[Action] Server restarting.\n")
+            f.flush()
         stop_minecraft_server()
         time.sleep(5) 
         start_minecraft_server()
