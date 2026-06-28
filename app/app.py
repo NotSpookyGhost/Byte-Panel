@@ -10,6 +10,9 @@ import psutil
 import signal
 import shutil
 import zipfile
+import sqlite3
+import urllib.request
+import geoip2.database
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory, send_file, make_response
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
@@ -50,6 +53,16 @@ app = Flask(__name__)
 app.secret_key = os.getenv("PANEL_SECRET_KEY", "mc-panel-secure-key-2026")
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+@app.context_processor
+def inject_version():
+    try:
+        version_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'version.txt')
+        with open(version_file_path, 'r') as f:
+            v = f.read().strip()
+    except Exception:
+        v = "Unknown"
+    return dict(app_version=f"v{v}")
+
 # --- Predefined Storage Path Architecture ---
 DATA_DIR = "/data"
 BRANDING_DIR = os.path.join(DATA_DIR, "branding")
@@ -59,7 +72,85 @@ os.makedirs(SERVER_DIR, exist_ok=True)
 os.makedirs(os.path.join(DATA_DIR, "logs"), exist_ok=True)
 
 CONFIG_FILE = os.path.join(DATA_DIR, "panel_config.json")
-PLAYER_DB_FILE = os.path.join(DATA_DIR, "player_history.json")
+PLAYER_DB_FILE = os.path.join(DATA_DIR, "players.db")
+GEOIP_DB_FILE = os.path.join(DATA_DIR, "GeoLite2-Country.mmdb")
+
+def init_db():
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            uuid TEXT PRIMARY KEY,
+            username TEXT,
+            first_seen TEXT,
+            last_seen TEXT,
+            ban_status BOOLEAN DEFAULT 0,
+            online_status BOOLEAN DEFAULT 0
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS login_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT,
+            timestamp TEXT,
+            ip TEXT,
+            country TEXT,
+            FOREIGN KEY(uuid) REFERENCES users(uuid)
+        )
+    ''')
+    conn.execute("UPDATE users SET online_status = 0")
+    
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS ban_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT,
+            action TEXT,
+            ban_type TEXT,
+            reason TEXT,
+            admin TEXT,
+            timestamp TEXT,
+            FOREIGN KEY(uuid) REFERENCES users(uuid)
+        )
+    ''')
+    
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN ban_type TEXT DEFAULT 'both'")
+    except sqlite3.OperationalError:
+        pass
+        
+    conn.commit()
+    conn.close()
+
+def ensure_geoip_db():
+    if not os.path.exists(GEOIP_DB_FILE):
+        print("Downloading GeoLite2 Country database...")
+        try:
+            url = "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
+            urllib.request.urlretrieve(url, GEOIP_DB_FILE)
+            print("Download complete.")
+        except Exception as e:
+            print(f"Error downloading GeoIP DB: {e}")
+
+init_db()
+ensure_geoip_db()
+
+def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        return {
+            "panel_name": "ByteDev Webpanel",
+            "theme_accent": "default",
+            "admin_user": "admin",
+            "admin_pass": "admin",
+            "cpu_limit": 0,
+            "target_state": "Offline"
+        }
+    with open(CONFIG_FILE, "r") as f:
+        return json.load(f)
+
+def save_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=4)
 
 # --- Global State Variables ---
 MINECRAFT_PROCESS = None
@@ -76,7 +167,9 @@ DEFAULT_CONFIG = {
     "theme_accent": "emerald",
     "panel_name": "Portal Node",
     "login_blur": "5",
-    "login_tint": "rgba(11, 11, 12, 0.6)"
+    "login_tint": "rgba(11, 11, 12, 0.6)",
+    "timezone": "UTC",
+    "time_format": "12"
 }
 
 # --- Helper Functions ---
@@ -93,14 +186,102 @@ def save_config(config):
         json.dump(config, f, indent=4)
 
 def load_player_history():
-    if not os.path.exists(PLAYER_DB_FILE):
+    file_path = os.path.join(DATA_DIR, "player_history.json")
+    if not os.path.exists(file_path):
         return {}
-    with open(PLAYER_DB_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(file_path, "r") as f:
+            return json.load(f)
+    except:
+        return {}
 
 def save_player_history(data):
-    with open(PLAYER_DB_FILE, "w") as f:
+    file_path = os.path.join(DATA_DIR, "player_history.json")
+    with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
+
+def sync_bans_from_server():
+    banned_uuids = {}
+    banned_ips = {}
+    
+    bp_path = os.path.join(SERVER_DIR, "banned-players.json")
+    if os.path.exists(bp_path):
+        try:
+            with open(bp_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for item in data:
+                    if "uuid" in item:
+                        banned_uuids[item["uuid"].lower()] = item
+        except:
+            pass
+            
+    bi_path = os.path.join(SERVER_DIR, "banned-ips.json")
+    if os.path.exists(bi_path):
+        try:
+            with open(bi_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for item in data:
+                    if "ip" in item:
+                        banned_ips[item["ip"].lower()] = item
+        except:
+            pass
+            
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    users = conn.execute('''
+        SELECT u.uuid, u.ban_status,
+               (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip
+        FROM users u
+    ''').fetchall()
+    
+    updates = []
+    events = []
+    now_ts = datetime.utcnow().isoformat() + "Z"
+    
+    for row in users:
+        uuid = row[0]
+        current_status = row[1]
+        last_ip = row[2]
+        
+        uuid_ban_info = banned_uuids.get(uuid.lower())
+        ip_ban_info = banned_ips.get(last_ip.lower()) if last_ip else None
+        
+        is_uuid_banned = uuid_ban_info is not None
+        is_ip_banned = ip_ban_info is not None
+        
+        new_status = 1 if (is_uuid_banned or is_ip_banned) else 0
+        
+        if is_uuid_banned and is_ip_banned:
+            new_type = 'both'
+        elif is_uuid_banned:
+            new_type = 'uuid'
+        elif is_ip_banned:
+            new_type = 'ip'
+        else:
+            new_type = 'none'
+            
+        updates.append((new_status, new_type, uuid))
+        
+        if current_status == 0 and new_status == 1:
+            source = "Server"
+            reason = "Banned by an operator."
+            if uuid_ban_info:
+                source = uuid_ban_info.get("source", source)
+                reason = uuid_ban_info.get("reason", reason)
+            elif ip_ban_info:
+                source = ip_ban_info.get("source", source)
+                reason = ip_ban_info.get("reason", reason)
+            events.append((uuid, 'ban', new_type, reason, source, now_ts))
+            
+        elif current_status == 1 and new_status == 0:
+            events.append((uuid, 'unban', 'none', 'Unbanned', 'Server', now_ts))
+            
+    if updates:
+        conn.executemany("UPDATE users SET ban_status = ?, ban_type = ? WHERE uuid = ?", updates)
+    if events:
+        conn.executemany("INSERT INTO ban_events (uuid, action, ban_type, reason, admin, timestamp) VALUES (?, ?, ?, ?, ?, ?)", events)
+        
+    conn.commit()
+    conn.close()
 
 def get_java_version_path(mc_version):
     try:
@@ -153,11 +334,14 @@ def parse_log_line(line):
         history = load_player_history()
         if username in history:
             history[username]["ip"] = ip
-            try:
-                geo = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3).json()
-                history[username]["country"] = geo.get("country_name", "Unknown")
-            except Exception:
-                history[username]["country"] = "Local/Unknown"
+            if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.") or ip.startswith("127."):
+                history[username]["country"] = "Local Network"
+            else:
+                try:
+                    geo = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3).json()
+                    history[username]["country"] = geo.get("country_name", "Unknown")
+                except Exception:
+                    history[username]["country"] = "Unknown"
             save_player_history(history)
 
 def monitor_minecraft_stream(process):
@@ -248,10 +432,78 @@ def start_minecraft_server():
         MINECRAFT_PROCESS = process
         
         def stream_logger(proc, log_f):
+            pending_uuids = {} # username -> uuid map
+            
             for line in proc.stdout:
                 log_f.write(line)
                 log_f.flush()
+                
+                # Active Log Parsing for Security Monitor
+                try:
+                    # 1. Capture UUID mappings
+                    uuid_match = re.search(r'UUID of player ([a-zA-Z0-9_]+) is ([a-zA-Z0-9\-]+)', line)
+                    if uuid_match:
+                        pending_uuids[uuid_match.group(1)] = uuid_match.group(2)
+                        
+                    # 2. Capture Logins with IPs
+                    login_match = re.search(r'([a-zA-Z0-9_]+)\[/([0-9\.]+):[0-9]+\] logged in', line)
+                    if login_match:
+                        username = login_match.group(1)
+                        ip = login_match.group(2)
+                        uuid = pending_uuids.get(username, "unknown")
+                        
+                        country = "Unknown"
+                        if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.") or ip.startswith("127."):
+                            country = "Local Network"
+                        elif os.path.exists(GEOIP_DB_FILE):
+                            try:
+                                with geoip2.database.Reader(GEOIP_DB_FILE) as reader:
+                                    country = reader.country(ip).country.name or "Unknown"
+                            except Exception:
+                                pass
+                                
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        conn = sqlite3.connect(PLAYER_DB_FILE)
+                        # Upsert user
+                        conn.execute('''
+                            INSERT INTO users (uuid, username, first_seen, last_seen, online_status) 
+                            VALUES (?, ?, ?, ?, 1)
+                            ON CONFLICT(uuid) DO UPDATE SET 
+                                username=excluded.username,
+                                last_seen=excluded.last_seen,
+                                online_status=1
+                        ''', (uuid, username, timestamp, timestamp))
+                        
+                        # Insert login event
+                        conn.execute('''
+                            INSERT INTO login_events (uuid, timestamp, ip, country)
+                            VALUES (?, ?, ?, ?)
+                        ''', (uuid, timestamp, ip, country))
+                        
+                        conn.commit()
+                        conn.close()
+                        
+                    # 3. Capture Disconnects
+                    disconnect_match = re.search(r'([a-zA-Z0-9_]+) lost connection:', line)
+                    if disconnect_match:
+                        username = disconnect_match.group(1)
+                        conn = sqlite3.connect(PLAYER_DB_FILE)
+                        conn.execute("UPDATE users SET online_status = 0 WHERE username = ?", (username,))
+                        conn.commit()
+                        conn.close()
+                        
+                except Exception as e:
+                    print(f"Log parsing error: {e}", flush=True)
+
             log_f.close()
+            # On crash/stop, mark everyone offline
+            try:
+                conn = sqlite3.connect(PLAYER_DB_FILE)
+                conn.execute("UPDATE users SET online_status = 0")
+                conn.commit()
+                conn.close()
+            except: pass
             
         threading.Thread(target=stream_logger, args=(process, log_file), daemon=True).start()
         
@@ -552,9 +804,110 @@ def clear_logs():
     
     return jsonify({"status": "cleared"})
 
+@app.route('/api/players')
+def api_players():
+    if not request.args.get('skipSync'):
+        sync_bans_from_server()
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    conn.row_factory = sqlite3.Row
+    users = conn.execute('''
+        SELECT u.uuid, u.username, u.first_seen, u.last_seen, u.online_status, u.ban_status, u.ban_type,
+               (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip,
+               (SELECT country FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as country
+        FROM users u
+    ''').fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in users])
+
 @app.route('/players')
 def players():
-    return render_template('players.html', config=load_config(), players=load_player_history().values(), has_custom=get_custom_assets_state())
+    sync_bans_from_server()
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    conn.row_factory = sqlite3.Row
+    users = conn.execute('''
+        SELECT u.uuid, u.username, u.first_seen, u.last_seen, u.online_status, u.ban_status, u.ban_type,
+               (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip,
+               (SELECT country FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as country
+        FROM users u
+    ''').fetchall()
+    conn.close()
+    return render_template('players.html', config=load_config(), players=users, has_custom=get_custom_assets_state())
+
+@app.route('/api/player/<uuid>/history')
+def get_player_history(uuid):
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    conn.row_factory = sqlite3.Row
+    events = conn.execute('''
+        SELECT timestamp, ip, country 
+        FROM login_events 
+        WHERE uuid = ? 
+        ORDER BY timestamp DESC
+    ''', (uuid,)).fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in events])
+
+@app.route('/api/player/<uuid>/ban_history')
+def get_player_ban_history(uuid):
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    conn.row_factory = sqlite3.Row
+    events = conn.execute('''
+        SELECT action, ban_type, reason, admin, timestamp 
+        FROM ban_events 
+        WHERE uuid = ? 
+        ORDER BY timestamp DESC
+    ''', (uuid,)).fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in events])
+
+@app.route('/api/player/<action>', methods=['POST'])
+def moderate_player(action):
+    global MINECRAFT_PROCESS
+    payload = request.get_json()
+    player_name = payload.get('username')
+    ip = payload.get('ip')
+    reason = payload.get('reason', '')
+    ban_type = payload.get('ban_type', 'both')
+    
+    reason_str = f" {reason}" if reason else ""
+    
+    if not MINECRAFT_PROCESS or MINECRAFT_PROCESS.poll() is not None:
+        return jsonify({"status": "error", "message": "Server offline"})
+        
+    admin_user = load_config().get("admin_user", "Admin")
+    web_panel_source = f"Web Panel: {admin_user}"
+    now_ts = datetime.utcnow().isoformat() + "Z"
+    
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    user = conn.execute("SELECT uuid, ban_type FROM users WHERE username = ?", (player_name,)).fetchone()
+    uuid = user[0] if user else None
+    stored_type = user[1] if user and user[1] else 'both'
+        
+    if action == "kick":
+        MINECRAFT_PROCESS.stdin.write(f"kick {player_name}{reason_str}\n")
+    elif action == "ban":
+        if ban_type in ['username', 'both']:
+            MINECRAFT_PROCESS.stdin.write(f"ban {player_name}{reason_str}\n")
+        if ban_type in ['ip', 'both'] and ip:
+            MINECRAFT_PROCESS.stdin.write(f"ban-ip {ip}{reason_str}\n")
+            
+        if uuid:
+            conn.execute("UPDATE users SET ban_status = 1, ban_type = ? WHERE uuid = ?", (ban_type, uuid))
+            conn.execute("INSERT INTO ban_events (uuid, action, ban_type, reason, admin, timestamp) VALUES (?, ?, ?, ?, ?, ?)", (uuid, 'ban', ban_type, reason, web_panel_source, now_ts))
+    elif action == "unban":
+        if stored_type in ['username', 'uuid', 'both', 'none']:
+            MINECRAFT_PROCESS.stdin.write(f"pardon {player_name}\n")
+        if stored_type in ['ip', 'both', 'none'] and ip:
+            MINECRAFT_PROCESS.stdin.write(f"pardon-ip {ip}\n")
+            
+        if uuid:
+            conn.execute("UPDATE users SET ban_status = 0, ban_type = NULL WHERE uuid = ?", (uuid,))
+            conn.execute("INSERT INTO ban_events (uuid, action, ban_type, reason, admin, timestamp) VALUES (?, ?, ?, ?, ?, ?)", (uuid, 'unban', 'none', 'Unbanned', web_panel_source, now_ts))
+            
+    conn.commit()
+    conn.close()
+        
+    MINECRAFT_PROCESS.stdin.flush()
+    return jsonify({"status": "success"})
 
 def get_custom_assets_state():
     return {
@@ -572,6 +925,8 @@ def settings():
         config['panel_name'] = request.form.get('panel_name', config.get('panel_name'))
         config['login_blur'] = request.form.get('login_blur', config.get('login_blur'))
         config['login_tint'] = request.form.get('login_tint', config.get('login_tint'))
+        config['timezone'] = request.form.get('timezone', config.get('timezone', 'UTC'))
+        config['time_format'] = request.form.get('time_format', config.get('time_format', '12'))
         
         if 'custom_logo' in request.files and request.files['custom_logo'].filename:
             request.files['custom_logo'].save(os.path.join(BRANDING_DIR, 'logo.png'))
@@ -600,9 +955,17 @@ def server_action(action):
         success = start_minecraft_server()
         return jsonify({"status": "started" if success else "failed/already running"})
     elif action == "stop":
+        log_path = os.path.join(SERVER_DIR, "console.log")
+        with open(log_path, "a", encoding='utf-8') as f:
+            f.write("[Action] Server stopped.\n")
+            f.flush()
         success = stop_minecraft_server()
         return jsonify({"status": "stopping" if success else "already offline or error"})
     elif action == "restart":
+        log_path = os.path.join(SERVER_DIR, "console.log")
+        with open(log_path, "a", encoding='utf-8') as f:
+            f.write("[Action] Server restarting.\n")
+            f.flush()
         stop_minecraft_server()
         time.sleep(5) 
         start_minecraft_server()
@@ -820,6 +1183,17 @@ def handle_command(payload):
         cmd_str = payload.get('command', '') + "\n"
         MINECRAFT_PROCESS.stdin.write(cmd_str)
         MINECRAFT_PROCESS.stdin.flush()
+
+@app.route('/api/command', methods=['POST'])
+def handle_api_command():
+    global MINECRAFT_PROCESS
+    payload = request.get_json() or {}
+    if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
+        cmd_str = payload.get('command', '') + "\n"
+        MINECRAFT_PROCESS.stdin.write(cmd_str)
+        MINECRAFT_PROCESS.stdin.flush()
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error", "message": "Server offline"})
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)

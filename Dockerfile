@@ -31,7 +31,7 @@ COPY app/ /app/
 COPY version.txt /version.txt
 
 # We only need pip for Flask-SocketIO now, which is pure Python and requires 0 compilation
-RUN pip3 install --no-cache-dir --break-system-packages Flask-SocketIO==5.3.6
+RUN pip3 install --no-cache-dir --break-system-packages Flask-SocketIO==5.3.6 geoip2 maxminddb
 
 RUN chmod +x /entrypoint.sh
 

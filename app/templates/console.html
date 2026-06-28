@@ -31,13 +31,15 @@
         <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
             <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
             <form action="/logout" method="GET" style="margin: 0;">
-                <button type="submit" class="btn" style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
+                <button type="submit" class="btn"
+                    style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
             </form>
         </div>
     </div>
     <div class="main-layout">
         <div class="top-action-bar">
-            <div>Terminal Pipeline</div>
+            <div>Server Console | Status: <strong id="top-status" style="color: var(--text-muted);">Offline</strong>
+            </div>
             <div style="display:flex; gap:10px;">
                 <button class="btn btn-start" onclick="triggerAction('start')">Start</button>
                 <button class="btn btn-stop" onclick="triggerAction('stop')">Stop</button>
@@ -45,16 +47,75 @@
             </div>
         </div>
         <div class="console-container">
-            <h3 style="color: var(--text-main); margin-top: 0;">Live Server Console</h3>
+            <h3 style="color: var(--text-main); margin-top: 0;"></h3>
 
-            <textarea id="serverConsole" readonly
-                style="width: 100%; height: 400px; background-color: #000; color: #0f0; font-family: monospace; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
-    </textarea>
+            <div id="serverConsole" class="terminal"
+                style="width: 100%; height: 650px; overflow-y: auto; background-color: #000; color: #fff; font-family: monospace; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-top: 15px; max-width: 600px; margin-left: auto; margin-right: auto;">
+                <input type="text" id="commandInput" placeholder="Enter a server command (e.g. say Hello World)" 
+                    style="flex-grow: 1; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-main);"
+                    onkeydown="if(event.key === 'Enter') sendCommand()">
+                <button class="btn btn-start" onclick="sendCommand()">Send</button>
+            </div>
         </div>
 
         <script>
-            function triggerAction(action) { fetch('/api/server/' + action, { method: 'POST' }); }
-            
+            const configTz = "{{ config.get('timezone', 'UTC') }}";
+            const configTimeFormat = "{{ config.get('time_format', '12') }}";
+
+            function sendCommand() {
+                const input = document.getElementById('commandInput');
+                const commandText = input.value.trim();
+                
+                if (commandText !== '') {
+                    fetch('/api/command', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ command: commandText })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'error') {
+                            showToast("Error: " + data.message, "#dc2626");
+                        }
+                    })
+                    .catch(err => {
+                        showToast("Error: Failed to connect to command system.", "#dc2626");
+                    });
+                    
+                    input.value = '';
+                }
+            }
+            function showToast(message, actionColor) {
+                let container = document.getElementById('toast-container');
+                if (!container) {
+                    container = document.createElement('div');
+                    container.id = 'toast-container';
+                    container.style.cssText = 'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 9999; display: flex; flex-direction: column; gap: 10px; align-items: center;';
+                    document.body.appendChild(container);
+                }
+                const toast = document.createElement('div');
+                toast.className = 'toast';
+                toast.innerHTML = `<div class="toast-bar" style="background-color: ${actionColor};"></div><div class="toast-message"><strong>System Action</strong><br><span style="color:var(--text-muted);">${message}</span></div>`;
+                container.appendChild(toast);
+                setTimeout(() => {
+                    toast.style.opacity = '0';
+                    toast.style.transform = 'translateY(-100%)';
+                    toast.style.transition = 'all 0.3s ease-in';
+                    setTimeout(() => toast.remove(), 300);
+                }, 5000);
+            }
+
+            function triggerAction(action) {
+                let colors = { 'start': '#16a34a', 'stop': '#dc2626', 'restart': '#ca8a04' };
+                fetch('/api/server/' + action, { method: 'POST' })
+                    .then(res => res.json()).then(data => showToast("Server signal sent: " + data.status, colors[action] || 'var(--accent)'));
+            }
+
             const consoleBox = document.getElementById('serverConsole');
             let isScrolledToBottom = true;
 
@@ -63,15 +124,75 @@
                 isScrolledToBottom = consoleBox.scrollHeight - consoleBox.clientHeight <= consoleBox.scrollTop + 1;
             });
 
+            function escapeHTML(str) {
+                return str.replace(/[&<>'"]/g,
+                    tag => ({
+                        '&': '&amp;',
+                        '<': '&lt;',
+                        '>': '&gt;',
+                        "'": '&#39;',
+                        '"': '&quot;'
+                    }[tag] || tag)
+                );
+            }
+
+            function parseConsole(text) {
+                if (!text) return "";
+                const lines = text.split('\n');
+                let html = '';
+                for (let i = 0; i < lines.length; i++) {
+                    if (i === lines.length - 1 && lines[i] === "") continue;
+
+                    let safeLine = escapeHTML(lines[i]);
+
+                    // Format timestamp if it exists [HH:MM:SS]
+                    safeLine = safeLine.replace(/^\[(\d{2}:\d{2}:\d{2})\]/, (match, timeStr) => {
+                        const today = new Date().toISOString().split("T")[0];
+                        const date = new Date(`${today}T${timeStr}Z`);
+                        if (isNaN(date.getTime())) return match;
+                        
+                        const options = {
+                            timeZone: configTz,
+                            hour: '2-digit', minute: '2-digit', second: '2-digit',
+                            hour12: configTimeFormat === '12'
+                        };
+                        try {
+                            return '[' + new Intl.DateTimeFormat('en-US', options).format(date) + ']';
+                        } catch (e) {
+                            return match;
+                        }
+                    });
+
+                    let textColor = "#fff"; // base color white
+
+                    if (safeLine.includes("ERROR") || safeLine.includes("Exception") || safeLine.includes("FATAL") || safeLine.includes("FAILED") || safeLine.includes("Caused by")) {
+                        textColor = "#ef4444"; // red
+                    } else if (safeLine.includes("WARN") || safeLine.includes("WARNING") || safeLine.includes("Alert")) {
+                        textColor = "#f59e0b"; // orange/yellow
+                    } else if (safeLine.includes("[System]")) {
+                        textColor = "#3b82f6"; // blue
+                    } else if (safeLine.includes("[Action]")) {
+                        textColor = "#06b6d4"; // cyan
+                    }
+
+                    html += `<div style="color: ${textColor}; white-space: pre-wrap; word-wrap: break-word;">${safeLine}</div>`;
+                }
+                return html;
+            }
+
+            let previousData = "";
             function updateConsole() {
                 fetch('/api/console?t=' + Date.now())
                     .then(response => response.text())
                     .then(data => {
-                        consoleBox.value = data;
+                        if (data !== previousData) {
+                            consoleBox.innerHTML = parseConsole(data);
+                            previousData = data;
 
-                        // Auto-scroll to the bottom only if the user hasn't scrolled up to read something
-                        if (isScrolledToBottom) {
-                            consoleBox.scrollTop = consoleBox.scrollHeight;
+                            // Auto-scroll to the bottom only if the user hasn't scrolled up to read something
+                            if (isScrolledToBottom) {
+                                consoleBox.scrollTop = consoleBox.scrollHeight;
+                            }
                         }
                     })
                     .catch(err => console.error("Console fetch error:", err));
@@ -82,7 +203,30 @@
 
             // Run once immediately on load
             updateConsole();
+
+            function updateStats() {
+                fetch('/api/stats?t=' + Date.now()).then(res => res.json()).then(data => {
+                    const topStatus = document.getElementById('top-status');
+                    if (topStatus) {
+                        topStatus.innerText = data.status;
+                        if (data.status === 'Online') {
+                            topStatus.style.color = '#10b981';
+                        } else if (data.status === 'Starting' || data.status === 'Shutting Down') {
+                            topStatus.style.color = '#f59e0b';
+                        } else {
+                            topStatus.style.color = '#ef4444';
+                        }
+                    }
+                }).catch(err => console.error("Stats fetch error:", err));
+            }
+
+            setInterval(updateStats, 2000);
+            updateStats();
         </script>
+    <div style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
+        <div>{{ app_version }}</div>
+        <div>bytedev.app &copy; 2026</div>
+    </div>
 </body>
 
 </html>
