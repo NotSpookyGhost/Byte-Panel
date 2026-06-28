@@ -8,6 +8,67 @@
     {% else %}
     <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
     {% endif %}
+    <style>
+        .roster-table { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 20px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+        .roster-table th { 
+            padding: 16px; 
+            text-align: left; 
+            color: var(--text-muted); 
+            font-size: 0.85rem; 
+            text-transform: uppercase; 
+            letter-spacing: 0.05em; 
+            border-bottom: 1px solid var(--border); 
+            cursor: pointer; 
+            user-select: none;
+            background: rgba(0,0,0,0.2);
+            transition: background 0.2s, color 0.2s;
+        }
+        .roster-table th:hover { color: var(--text-main); background: rgba(0,0,0,0.4); }
+        .roster-table td { 
+            padding: 16px; 
+            border-bottom: 1px solid var(--border); 
+            vertical-align: middle; 
+        }
+        .roster-table tr:last-child td { border-bottom: none; }
+        .roster-row { 
+            transition: all 0.2s; 
+            cursor: pointer; 
+        }
+        .roster-row:hover { 
+            background-color: rgba(255, 255, 255, 0.04); 
+        }
+        .status-badge { 
+            padding: 4px 8px; 
+            border-radius: 6px; 
+            font-size: 0.75rem; 
+            font-weight: 700; 
+            display: inline-block;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .status-online { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+        .status-offline { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); }
+        .status-banned { background: rgba(239, 68, 68, 0.15); color: #ef4444; margin-left: 8px;}
+        .fw-bold { font-weight: 600; color: var(--text-main); font-size: 1.05rem; }
+        .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+        .text-sm { font-size: 0.85rem; color: var(--text-muted); }
+        .actions-cell { display: flex; gap: 8px; align-items: center; }
+        .btn-sm { padding: 6px 12px; font-size: 0.8rem; border-radius: 4px; }
+        
+        .pagination-controls {
+            display: flex; justify-content: space-between; align-items: center; margin-top: 15px;
+            padding-top: 15px; border-top: 1px solid var(--border);
+        }
+        .btn-outline {
+            background: transparent; border: 1px solid var(--border); color: var(--text-main); cursor: pointer;
+        }
+        .btn-outline:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        .btn-outline:disabled {
+            opacity: 0.5; cursor: not-allowed;
+        }
+    </style>
 </head>
 <body class="theme-{{ config.theme_accent }}">
     <div class="sidebar">
@@ -38,81 +99,126 @@
             <div>Database Registry</div>
         </div>
         <div class="main-content">
-            <div class="card" style="overflow-x: auto;">
-                <h3 style="margin-top: 0;">Master Player Roster</h3>
-                <table class="roster-table" style="width: 100%; border-collapse: collapse; text-align: left; margin-top: 20px;">
-                    <thead>
-                        <tr style="border-bottom: 2px solid var(--border); color: var(--text-muted);">
-                            <th style="padding: 10px;">Status</th>
-                            <th style="padding: 10px;">Head</th>
-                            <th style="padding: 10px;">Username</th>
-                            <th style="padding: 10px;">UUID</th>
-                            <th style="padding: 10px;">Last Login</th>
-                            <th style="padding: 10px;">Last IP</th>
-                            <th style="padding: 10px;">Country</th>
-                            <th style="padding: 10px; text-align:right;">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for p in players %}
-                        <tr class="player-tr" onclick="openAuditModal('{{ p.uuid }}', '{{ p.username }}', '{{ p.online_status }}', '{{ p.last_ip }}')" style="border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.2s;">
-                            <td style="padding: 10px;">
-                                {% if p.online_status %}
-                                <span style="color: #10b981; font-weight: bold;">● Online</span>
-                                {% else %}
-                                <span style="color: var(--text-muted);">○ Offline</span>
-                                {% endif %}
-                                {% if p.ban_status %}
-                                <span style="color: #ef4444; margin-left: 5px;">(Banned)</span>
-                                {% endif %}
-                            </td>
-                            <td style="padding: 10px;">
-                                <img src="https://crafatar.com/avatars/{{ p.uuid }}?size=32&overlay" alt="skin" style="border-radius: 4px; vertical-align: middle;">
-                            </td>
-                            <td style="padding: 10px;"><strong>{{ p.username }}</strong></td>
-                            <td style="padding: 10px; font-family: monospace; color: var(--text-muted); font-size: 0.85rem;">{{ p.uuid }}</td>
-                            <td style="padding: 10px; font-size: 0.9rem;">{{ p.last_seen }}</td>
-                            <td style="padding: 10px; color: var(--text-muted); font-family: monospace;">{{ p.last_ip }}</td>
-                            <td style="padding: 10px;">🌍 {{ p.country }}</td>
-                            <td style="padding: 10px; text-align:right;" onclick="event.stopPropagation();">
-                                <button class="btn btn-restart" style="padding: 5px 10px; font-size: 0.8rem; margin-right: 5px;" onclick="moderatePlayer('kick', '{{ p.username }}')">Kick</button>
-                                <button class="btn btn-stop" style="padding: 5px 10px; font-size: 0.8rem;" onclick="moderatePlayer('ban', '{{ p.username }}', '{{ p.last_ip }}')">Ban</button>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <h3 style="margin-top: 0; margin-bottom: 0;">Master Player Roster</h3>
+                    <div class="filter-group" style="display: flex; gap: 8px;">
+                        <button class="btn btn-outline btn-sm active" onclick="setFilter('all', this)">All</button>
+                        <button class="btn btn-outline btn-sm" onclick="setFilter('online', this)">Online</button>
+                        <button class="btn btn-outline btn-sm" onclick="setFilter('offline', this)">Offline</button>
+                        <button class="btn btn-outline btn-sm" onclick="setFilter('banned', this)">Banned</button>
+                    </div>
+                    <input type="text" id="playerSearch" onkeyup="searchPlayers()" placeholder="Search by username..." style="padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-dark); color: var(--text-main); width: 250px; font-size: 0.9rem;">
+                </div>
+            </div>
+            
+            <table class="roster-table" id="rosterTable">
+                <thead>
+                    <tr>
+                        <th onclick="sortTable(0, 'string')">Status ⇕</th>
+                        <th>Head</th>
+                        <th onclick="sortTable(2, 'string')">Username ⇕</th>
+                        <th onclick="sortTable(3, 'string')">UUID ⇕</th>
+                        <th onclick="sortTable(4, 'date')">Last Login ⇕</th>
+                        <th onclick="sortTable(5, 'string')">Last IP ⇕</th>
+                        <th onclick="sortTable(6, 'string')">Country ⇕</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in players %}
+                    <tr class="roster-row" onclick="openAuditModal('{{ p.uuid }}', '{{ p.username }}', '{{ p.online_status }}', '{{ p.last_ip }}', '{{ p.ban_status }}')">
+                        <td>
+                            {% if p.online_status %}
+                            <span class="status-badge status-online">Online</span>
+                            {% else %}
+                            <span class="status-badge status-offline">Offline</span>
+                            {% endif %}
+                            {% if p.ban_status %}
+                            <span class="status-badge status-banned">Banned</span>
+                            {% endif %}
+                        </td>
+                        <td><img src="https://minotar.net/helm/{{ p.username }}/36.png" alt="skin" style="border-radius: 6px; width: 36px; height: 36px; display: block; image-rendering: pixelated;"></td>
+                        <td class="fw-bold">{{ p.username }}</td>
+                        <td class="font-mono text-sm">{{ p.uuid }}</td>
+                        <td class="text-sm">{{ p.last_seen }}</td>
+                        <td class="font-mono text-sm">{{ p.last_ip }}</td>
+                        <td class="text-sm">🌍 {{ p.country }}</td>
+                        <td class="actions-cell">
+                            <button class="btn btn-restart btn-sm" onclick="openKickModal('{{ p.username }}', event)">Kick</button>
+                            {% if p.ban_status %}
+                            <button class="btn btn-outline btn-sm" onclick="moderatePlayerDirect('unban', '{{ p.username }}', '{{ p.last_ip }}', event)">Unban</button>
+                            {% else %}
+                            <button class="btn btn-stop btn-sm" onclick="openBanModal('{{ p.username }}', '{{ p.last_ip }}', event)">Ban</button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Kick Modal -->
+    <div id="kickModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1050; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
+        <div class="card" style="width: 400px; max-width: 90%; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+            <h3 style="margin-top: 0; color: var(--text-main);">Kick Player</h3>
+            <p style="color: var(--text-muted); margin-bottom: 15px;">Reason for kicking <span id="kickTarget" class="fw-bold" style="color: var(--text-main);"></span>:</p>
+            <input type="text" id="kickReason" style="width: 100%; box-sizing: border-box; margin-bottom: 20px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;" placeholder="Optional reason...">
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="btn btn-outline" onclick="closeKickModal()">Cancel</button>
+                <button class="btn btn-restart" onclick="executeKick()">Confirm Kick</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Ban Modal -->
+    <div id="banModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1050; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
+        <div class="card" style="width: 400px; max-width: 90%; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+            <h3 style="margin-top: 0; color: var(--text-main);">Ban Player</h3>
+            <p style="color: var(--text-muted); margin-bottom: 15px;">Ban settings for <span id="banTarget" class="fw-bold" style="color: var(--text-main);"></span>:</p>
+            <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-muted);">Ban Target</label>
+            <select id="banType" style="width: 100%; box-sizing: border-box; margin-bottom: 15px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;">
+                <option value="both">Both (Username + IP)</option>
+                <option value="username">Username Only</option>
+                <option value="ip">IP Address Only</option>
+            </select>
+            <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-muted);">Reason</label>
+            <input type="text" id="banReason" style="width: 100%; box-sizing: border-box; margin-bottom: 20px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;" placeholder="Optional reason...">
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="btn btn-outline" onclick="closeBanModal()">Cancel</button>
+                <button class="btn btn-stop" onclick="executeBan()">Confirm Ban</button>
             </div>
         </div>
     </div>
     
     <!-- Security Audit Modal -->
-    <div id="auditModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
-        <div class="card" style="width: 800px; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column;">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 15px;">
+    <div id="auditModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
+        <div class="card" style="width: 800px; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px;">
                 <div style="display: flex; align-items: center; gap: 15px;">
-                    <img id="modalHead" src="" alt="skin" style="width: 48px; height: 48px; border-radius: 6px;">
+                    <img id="modalHead" src="" alt="skin" style="width: 56px; height: 56px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); image-rendering: pixelated;">
                     <div>
-                        <h2 id="modalUsername" style="margin: 0; color: var(--text-main);"></h2>
-                        <div id="modalStatus" style="font-size: 0.9rem; margin-top: 5px;"></div>
+                        <h2 id="modalUsername" style="margin: 0; color: var(--text-main); font-size: 1.4rem;"></h2>
+                        <div id="modalUuid" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted); margin-top: 4px;"></div>
+                        <div id="modalStatus" style="font-size: 0.9rem; margin-top: 6px;"></div>
                     </div>
                 </div>
-                <button class="btn" onclick="closeAuditModal()" style="background: transparent; color: var(--text-main); border: 1px solid var(--border);">Close</button>
+                <button class="btn btn-outline" onclick="closeAuditModal()" style="padding: 8px 16px;">Close</button>
             </div>
             
-            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                <button class="btn btn-restart" style="flex: 1;" onclick="moderatePlayerModal('kick')">Kick Active Session</button>
-                <button class="btn btn-stop" style="flex: 1;" onclick="moderatePlayerModal('ban')">Execute IP & UUID Ban</button>
+            <div id="auditModalActions" style="display: flex; gap: 12px; margin-bottom: 20px;">
+                <!-- Populated dynamically based on ban status -->
             </div>
             
-            <h4 style="margin: 0 0 10px 0;">Chronological Login Ledger</h4>
-            <div style="flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 10px; background: var(--bg-main);">
+            <h4 style="margin: 0 0 12px 0; color: var(--text-main); font-size: 1.1rem;">Chronological Login Ledger</h4>
+            <div style="flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--bg-dark);">
                 <table style="width: 100%; border-collapse: collapse; text-align: left;">
                     <thead>
-                        <tr style="border-bottom: 1px solid var(--border); color: var(--text-muted);">
-                            <th style="padding: 8px;">Timestamp</th>
-                            <th style="padding: 8px;">IP Address</th>
-                            <th style="padding: 8px;">Country</th>
+                        <tr style="border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02);">
+                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Timestamp</th>
+                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">IP Address</th>
+                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Country</th>
                         </tr>
                     </thead>
                     <tbody id="modalLedgerBody">
@@ -120,21 +226,86 @@
                     </tbody>
                 </table>
             </div>
+            
+            <div class="pagination-controls">
+                <button id="prevPageBtn" class="btn btn-outline btn-sm" onclick="prevPage()">Previous</button>
+                <span id="pageIndicator" style="font-size: 0.9rem; color: var(--text-muted); font-weight: 500;">Page 1 of 1</span>
+                <button id="nextPageBtn" class="btn btn-outline btn-sm" onclick="nextPage()">Next</button>
+            </div>
         </div>
     </div>
 
     <div id="toast-container"></div>
 
     <script>
-        // Inject dynamic hover styles for table rows
-        const style = document.createElement('style');
-        style.innerHTML = `
-            .player-tr:hover { background-color: rgba(255, 255, 255, 0.05); }
-        `;
-        document.head.appendChild(style);
-
         let currentModalUsername = "";
         let currentModalIp = "";
+        
+        let currentLedgerData = [];
+        let currentPage = 1;
+        const itemsPerPage = 10;
+        
+        let currentFilter = 'all';
+        function setFilter(filter, btnElement) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-group button').forEach(b => b.classList.remove('active'));
+            if(btnElement) btnElement.classList.add('active');
+            searchPlayers();
+        }
+
+        let sortDirection = false;
+        function searchPlayers() {
+            const input = document.getElementById('playerSearch').value.toLowerCase();
+            const table = document.getElementById("rosterTable");
+            const tr = Array.from(table.tBodies[0].getElementsByTagName("tr"));
+            
+            tr.forEach(row => {
+                const usernameCell = row.cells[2];
+                const statusCell = row.cells[0];
+                if (usernameCell && statusCell) {
+                    const username = (usernameCell.textContent || usernameCell.innerText).toLowerCase();
+                    const statusText = (statusCell.textContent || statusCell.innerText).toLowerCase();
+                    
+                    const matchesSearch = username.indexOf(input) > -1;
+                    let matchesFilter = true;
+                    if(currentFilter === 'online' && statusText.indexOf('online') === -1) matchesFilter = false;
+                    if(currentFilter === 'offline' && statusText.indexOf('offline') === -1) matchesFilter = false;
+                    if(currentFilter === 'banned' && statusText.indexOf('banned') === -1) matchesFilter = false;
+                    
+                    if (matchesSearch && matchesFilter) {
+                        row.style.display = "";
+                    } else {
+                        row.style.display = "none";
+                    }
+                }
+            });
+        }
+        
+        function sortTable(columnIndex, type) {
+            const table = document.getElementById("rosterTable");
+            const tbody = table.tBodies[0];
+            const rows = Array.from(tbody.querySelectorAll("tr"));
+            
+            sortDirection = !sortDirection;
+            
+            rows.sort((a, b) => {
+                let cellA = a.cells[columnIndex].innerText.trim().toLowerCase();
+                let cellB = b.cells[columnIndex].innerText.trim().toLowerCase();
+                
+                if (type === 'date') {
+                    cellA = new Date(cellA).getTime() || 0;
+                    cellB = new Date(cellB).getTime() || 0;
+                    return sortDirection ? cellA - cellB : cellB - cellA;
+                }
+                
+                if (cellA < cellB) return sortDirection ? -1 : 1;
+                if (cellA > cellB) return sortDirection ? 1 : -1;
+                return 0;
+            });
+            
+            tbody.innerHTML = '';
+            rows.forEach(row => tbody.appendChild(row));
+        }
 
         function showToast(message, actionColor) {
             let container = document.getElementById('toast-container');
@@ -156,7 +327,70 @@
             }, 5000);
         }
 
-        function moderatePlayer(action, username, ip = "") {
+        let activeKickUser = "";
+        function openKickModal(username, event) {
+            if(event) event.stopPropagation();
+            activeKickUser = username;
+            document.getElementById('kickTarget').innerText = username;
+            document.getElementById('kickReason').value = "";
+            document.getElementById('kickModal').style.display = "flex";
+        }
+        function closeKickModal() {
+            document.getElementById('kickModal').style.display = "none";
+        }
+        function executeKick() {
+            const reason = document.getElementById('kickReason').value;
+            fetch('/api/player/kick', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: activeKickUser, reason: reason })
+            }).then(r => r.json()).then(data => {
+                if (data.status === 'success') {
+                    showToast('Executed KICK on ' + activeKickUser, '#ca8a04');
+                    closeKickModal();
+                    if(document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
+                    fetchPlayers();
+                } else {
+                    showToast("Error: " + data.message, "#dc2626");
+                }
+            });
+        }
+
+        let activeBanUser = "";
+        let activeBanIp = "";
+        function openBanModal(username, ip, event) {
+            if(event) event.stopPropagation();
+            activeBanUser = username;
+            activeBanIp = ip;
+            document.getElementById('banTarget').innerText = username;
+            document.getElementById('banReason').value = "";
+            document.getElementById('banType').value = "both";
+            document.getElementById('banModal').style.display = "flex";
+        }
+        function closeBanModal() {
+            document.getElementById('banModal').style.display = "none";
+        }
+        function executeBan() {
+            const reason = document.getElementById('banReason').value;
+            const banType = document.getElementById('banType').value;
+            fetch('/api/player/ban', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: activeBanUser, ip: activeBanIp, reason: reason, ban_type: banType })
+            }).then(r => r.json()).then(data => {
+                if (data.status === 'success') {
+                    showToast('Executed BAN on ' + activeBanUser, '#dc2626');
+                    closeBanModal();
+                    if(document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
+                    fetchPlayers();
+                } else {
+                    showToast("Error: " + data.message, "#dc2626");
+                }
+            });
+        }
+
+        function moderatePlayerDirect(action, username, ip, event) {
+            if (event) event.stopPropagation();
             fetch('/api/player/' + action, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -165,62 +399,147 @@
             .then(res => res.json())
             .then(data => {
                 if (data.status === 'success') {
-                    showToast(\`Executed \${action.toUpperCase()} on \${username}\`, action === 'ban' ? '#dc2626' : '#ca8a04');
-                    setTimeout(() => location.reload(), 1000);
+                    showToast(`Executed ${action.toUpperCase()} on ${username}`, action === 'ban' ? '#dc2626' : '#ca8a04');
+                    if(document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
+                    fetchPlayers();
                 } else {
                     showToast("Error: " + data.message, "#dc2626");
                 }
             });
         }
+
+        function renderLedgerPage(page) {
+            const tbody = document.getElementById('modalLedgerBody');
+            tbody.innerHTML = '';
+            
+            const start = (page - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            const paginatedItems = currentLedgerData.slice(start, end);
+            
+            if (paginatedItems.length === 0 && page === 1) {
+                tbody.innerHTML = '<tr><td colspan="3" style="padding: 16px; text-align: center; color: var(--text-muted);">No logs found.</td></tr>';
+                document.getElementById('pageIndicator').innerText = `Page 1 of 1`;
+                document.getElementById('prevPageBtn').disabled = true;
+                document.getElementById('nextPageBtn').disabled = true;
+                return;
+            }
+            
+            paginatedItems.forEach(row => {
+                tbody.innerHTML += `
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 12px 16px; font-size: 0.9rem;">${row.timestamp}</td>
+                        <td style="padding: 12px 16px; font-family: monospace; color: var(--text-muted);">${row.ip}</td>
+                        <td style="padding: 12px 16px;">🌍 ${row.country}</td>
+                    </tr>
+                `;
+            });
+            
+            const totalPages = Math.ceil(currentLedgerData.length / itemsPerPage) || 1;
+            document.getElementById('pageIndicator').innerText = `Page ${page} of ${totalPages}`;
+            document.getElementById('prevPageBtn').disabled = page === 1;
+            document.getElementById('nextPageBtn').disabled = page === totalPages;
+        }
         
-        function moderatePlayerModal(action) {
-            moderatePlayer(action, currentModalUsername, currentModalIp);
+        function prevPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                renderLedgerPage(currentPage);
+            }
+        }
+        
+        function nextPage() {
+            const totalPages = Math.ceil(currentLedgerData.length / itemsPerPage);
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderLedgerPage(currentPage);
+            }
         }
 
-        function openAuditModal(uuid, username, onlineStr, lastIp) {
+        function openAuditModal(uuid, username, onlineStr, lastIp, bannedStr) {
             currentModalUsername = username;
             currentModalIp = lastIp;
             
-            document.getElementById('modalHead').src = \`https://crafatar.com/avatars/\${uuid}?size=48&overlay\`;
+            document.getElementById('modalHead').src = `https://minotar.net/helm/${username}/56.png`;
             document.getElementById('modalUsername').innerText = username;
+            document.getElementById('modalUuid').innerText = uuid;
             
-            const isOnline = onlineStr === "1" || onlineStr === "True" || onlineStr === "true";
+            const isOnline = String(onlineStr).toLowerCase() === "1" || String(onlineStr).toLowerCase() === "true";
             document.getElementById('modalStatus').innerHTML = isOnline 
-                ? '<span style="color: #10b981; font-weight: bold;">● Active Session</span>'
-                : '<span style="color: var(--text-muted);">○ Offline</span>';
+                ? '<span class="status-badge status-online">● Active Session</span>'
+                : '<span class="status-badge status-offline">○ Offline</span>';
+
+            const isBanned = String(bannedStr).toLowerCase() === "1" || String(bannedStr).toLowerCase() === "true";
+            let actionsHtml = `<button class="btn btn-restart" style="flex: 1;" onclick="openKickModal('${username}', null)">Kick Active Session</button>`;
+            if (isBanned) {
+                actionsHtml += `<button class="btn btn-outline" style="flex: 1;" onclick="moderatePlayerDirect('unban', '${username}', '${lastIp}', null)">Unban Player</button>`;
+            } else {
+                actionsHtml += `<button class="btn btn-stop" style="flex: 1;" onclick="openBanModal('${username}', '${lastIp}', null)">Execute Ban</button>`;
+            }
+            document.getElementById('auditModalActions').innerHTML = actionsHtml;
                 
             document.getElementById('auditModal').style.display = 'flex';
             
-            // Fetch history
             const tbody = document.getElementById('modalLedgerBody');
-            tbody.innerHTML = '<tr><td colspan="3" style="padding: 10px; text-align: center;">Loading ledger...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="3" style="padding: 16px; text-align: center; color: var(--text-muted);">Loading ledger...</td></tr>';
+            document.getElementById('prevPageBtn').disabled = true;
+            document.getElementById('nextPageBtn').disabled = true;
             
-            fetch(\`/api/player/\${uuid}/history\`)
+            fetch(`/api/player/${uuid}/history`)
                 .then(res => res.json())
                 .then(data => {
-                    tbody.innerHTML = '';
-                    if (data.length === 0) {
-                        tbody.innerHTML = '<tr><td colspan="3" style="padding: 10px; text-align: center; color: var(--text-muted);">No logs found.</td></tr>';
-                        return;
-                    }
-                    data.forEach(row => {
-                        tbody.innerHTML += \`
-                            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                                <td style="padding: 8px; font-size: 0.9rem;">\${row.timestamp}</td>
-                                <td style="padding: 8px; font-family: monospace; color: var(--text-muted);">\${row.ip}</td>
-                                <td style="padding: 8px;">🌍 \${row.country}</td>
-                            </tr>
-                        \`;
-                    });
+                    currentLedgerData = data;
+                    currentPage = 1;
+                    renderLedgerPage(currentPage);
                 })
                 .catch(err => {
-                    tbody.innerHTML = '<tr><td colspan="3" style="padding: 10px; text-align: center; color: #ef4444;">Failed to load ledger.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="3" style="padding: 16px; text-align: center; color: #ef4444;">Failed to load ledger.</td></tr>';
                 });
         }
 
         function closeAuditModal() {
             document.getElementById('auditModal').style.display = 'none';
         }
+
+        function fetchPlayers() {
+            fetch('/api/players')
+            .then(r => r.json())
+            .then(players => {
+                const tbody = document.getElementById("rosterTable").tBodies[0];
+                tbody.innerHTML = '';
+                players.forEach(p => {
+                    const tr = document.createElement('tr');
+                    tr.className = 'roster-row';
+                    tr.onclick = () => openAuditModal(p.uuid, p.username, p.online_status, p.last_ip, p.ban_status);
+                    
+                    let statusHtml = p.online_status ? '<span class="status-badge status-online">Online</span>' : '<span class="status-badge status-offline">Offline</span>';
+                    if (p.ban_status) statusHtml += ' <span class="status-badge status-banned">Banned</span>';
+                    
+                    let actionsHtml = `<button class="btn btn-restart btn-sm" onclick="openKickModal('${p.username}', event)">Kick</button> `;
+                    if (p.ban_status) {
+                        actionsHtml += `<button class="btn btn-outline btn-sm" onclick="moderatePlayerDirect('unban', '${p.username}', '${p.last_ip}', event)">Unban</button>`;
+                    } else {
+                        actionsHtml += `<button class="btn btn-stop btn-sm" onclick="openBanModal('${p.username}', '${p.last_ip}', event)">Ban</button>`;
+                    }
+                    
+                    tr.innerHTML = `
+                        <td>${statusHtml}</td>
+                        <td><img src="https://minotar.net/helm/${p.username}/36.png" alt="skin" style="border-radius: 6px; width: 36px; height: 36px; display: block; image-rendering: pixelated;"></td>
+                        <td class="fw-bold">${p.username}</td>
+                        <td class="font-mono text-sm">${p.uuid}</td>
+                        <td class="text-sm">${p.last_seen}</td>
+                        <td class="font-mono text-sm">${p.last_ip || 'Unknown'}</td>
+                        <td class="text-sm">🌍 ${p.country || 'Unknown'}</td>
+                        <td class="actions-cell">${actionsHtml}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+                searchPlayers();
+            });
+        }
+
+        {% if config.is_running %}
+        setInterval(fetchPlayers, 10000);
+        {% endif %}
     </script>
 </body>
 </html>

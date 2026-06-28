@@ -90,6 +90,12 @@ def init_db():
         )
     ''')
     conn.execute("UPDATE users SET online_status = 0")
+    
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN ban_type TEXT DEFAULT 'both'")
+    except sqlite3.OperationalError:
+        pass
+        
     conn.commit()
     conn.close()
 
@@ -155,13 +161,18 @@ def save_config(config):
         json.dump(config, f, indent=4)
 
 def load_player_history():
-    if not os.path.exists(PLAYER_DB_FILE):
+    file_path = os.path.join(DATA_DIR, "player_history.json")
+    if not os.path.exists(file_path):
         return {}
-    with open(PLAYER_DB_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(file_path, "r") as f:
+            return json.load(f)
+    except:
+        return {}
 
 def save_player_history(data):
-    with open(PLAYER_DB_FILE, "w") as f:
+    file_path = os.path.join(DATA_DIR, "player_history.json")
+    with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
 
 def get_java_version_path(mc_version):
@@ -215,11 +226,14 @@ def parse_log_line(line):
         history = load_player_history()
         if username in history:
             history[username]["ip"] = ip
-            try:
-                geo = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3).json()
-                history[username]["country"] = geo.get("country_name", "Unknown")
-            except Exception:
-                history[username]["country"] = "Local/Unknown"
+            if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.") or ip.startswith("127."):
+                history[username]["country"] = "Local Network"
+            else:
+                try:
+                    geo = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3).json()
+                    history[username]["country"] = geo.get("country_name", "Unknown")
+                except Exception:
+                    history[username]["country"] = "Unknown"
             save_player_history(history)
 
 def monitor_minecraft_stream(process):
@@ -331,7 +345,9 @@ def start_minecraft_server():
                         uuid = pending_uuids.get(username, "unknown")
                         
                         country = "Unknown"
-                        if os.path.exists(GEOIP_DB_FILE):
+                        if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.") or ip.startswith("127."):
+                            country = "Local Network"
+                        elif os.path.exists(GEOIP_DB_FILE):
                             try:
                                 with geoip2.database.Reader(GEOIP_DB_FILE) as reader:
                                     country = reader.country(ip).country.name or "Unknown"
@@ -680,12 +696,25 @@ def clear_logs():
     
     return jsonify({"status": "cleared"})
 
+@app.route('/api/players')
+def api_players():
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    conn.row_factory = sqlite3.Row
+    users = conn.execute('''
+        SELECT u.uuid, u.username, u.first_seen, u.last_seen, u.online_status, u.ban_status, u.ban_type,
+               (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip,
+               (SELECT country FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as country
+        FROM users u
+    ''').fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in users])
+
 @app.route('/players')
 def players():
     conn = sqlite3.connect(PLAYER_DB_FILE)
     conn.row_factory = sqlite3.Row
     users = conn.execute('''
-        SELECT u.uuid, u.username, u.first_seen, u.last_seen, u.online_status, u.ban_status,
+        SELECT u.uuid, u.username, u.first_seen, u.last_seen, u.online_status, u.ban_status, u.ban_type,
                (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip,
                (SELECT country FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as country
         FROM users u
@@ -712,19 +741,37 @@ def moderate_player(action):
     payload = request.get_json()
     player_name = payload.get('username')
     ip = payload.get('ip')
+    reason = payload.get('reason', '')
+    ban_type = payload.get('ban_type', 'both')
+    
+    reason_str = f" {reason}" if reason else ""
     
     if not MINECRAFT_PROCESS or MINECRAFT_PROCESS.poll() is not None:
         return jsonify({"status": "error", "message": "Server offline"})
         
     if action == "kick":
-        MINECRAFT_PROCESS.stdin.write(f"kick {player_name}\n")
+        MINECRAFT_PROCESS.stdin.write(f"kick {player_name}{reason_str}\n")
     elif action == "ban":
-        MINECRAFT_PROCESS.stdin.write(f"ban {player_name}\n")
-        if ip:
-            MINECRAFT_PROCESS.stdin.write(f"ban-ip {ip}\n")
+        if ban_type in ['username', 'both']:
+            MINECRAFT_PROCESS.stdin.write(f"ban {player_name}{reason_str}\n")
+        if ban_type in ['ip', 'both'] and ip:
+            MINECRAFT_PROCESS.stdin.write(f"ban-ip {ip}{reason_str}\n")
             
         conn = sqlite3.connect(PLAYER_DB_FILE)
-        conn.execute("UPDATE users SET ban_status = 1 WHERE username = ?", (player_name,))
+        conn.execute("UPDATE users SET ban_status = 1, ban_type = ? WHERE username = ?", (ban_type, player_name))
+        conn.commit()
+        conn.close()
+    elif action == "unban":
+        conn = sqlite3.connect(PLAYER_DB_FILE)
+        user = conn.execute("SELECT ban_type FROM users WHERE username = ?", (player_name,)).fetchone()
+        stored_type = user[0] if user and user[0] else 'both'
+        
+        if stored_type in ['username', 'both']:
+            MINECRAFT_PROCESS.stdin.write(f"pardon {player_name}\n")
+        if stored_type in ['ip', 'both'] and ip:
+            MINECRAFT_PROCESS.stdin.write(f"pardon-ip {ip}\n")
+            
+        conn.execute("UPDATE users SET ban_status = 0, ban_type = NULL WHERE username = ?", (player_name,))
         conn.commit()
         conn.close()
         
