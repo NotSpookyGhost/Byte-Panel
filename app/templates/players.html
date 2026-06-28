@@ -218,7 +218,7 @@
     
     <!-- Security Audit Modal -->
     <div id="auditModal" onclick="if(event.target === this) closeAuditModal()" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
-        <div class="card" style="width: 800px; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+        <div class="card" style="width: 800px; height: 750px; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px;">
                 <div style="display: flex; align-items: center; gap: 15px;">
                     <img id="modalHead" src="" alt="skin" style="width: 56px; height: 56px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); image-rendering: pixelated;">
@@ -235,8 +235,12 @@
                 <!-- Populated dynamically based on ban status -->
             </div>
             
-            <h4 style="margin: 0 0 12px 0; color: var(--text-main); font-size: 1.1rem;">Chronological Login Ledger</h4>
-            <div style="flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--bg-dark);">
+            <div class="modal-tabs" style="display: flex; border-bottom: 1px solid var(--border); margin-bottom: 15px;">
+                <button class="tab-btn active" onclick="switchAuditTab('ledger')" id="tab-ledger" style="background: none; border: none; border-bottom: 2px solid var(--primary); color: var(--primary); padding: 10px 20px; cursor: pointer; font-weight: 500;">Login Ledger</button>
+                <button class="tab-btn" onclick="switchAuditTab('bans')" id="tab-bans" style="background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); padding: 10px 20px; cursor: pointer; font-weight: 500;">Ban History</button>
+            </div>
+            
+            <div id="auditTabLedger" style="flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--bg-dark);">
                 <table style="width: 100%; border-collapse: collapse; text-align: left;">
                     <thead>
                         <tr style="border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02);">
@@ -246,6 +250,23 @@
                         </tr>
                     </thead>
                     <tbody id="modalLedgerBody">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+            
+            <div id="auditTabBans" style="display: none; flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--bg-dark);">
+                <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02);">
+                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Date</th>
+                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Action</th>
+                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Type</th>
+                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Admin</th>
+                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modalBansBody">
                         <!-- Populated by JS -->
                     </tbody>
                 </table>
@@ -266,7 +287,10 @@
         let currentModalIp = "";
         
         let currentLedgerData = [];
-        let currentPage = 1;
+        let currentLedgerPage = 1;
+        let currentBansData = [];
+        let currentBansPage = 1;
+        let activeAuditTab = 'ledger';
         const itemsPerPage = 10;
         
         let currentFilter = 'all';
@@ -444,9 +468,11 @@
             
             if (paginatedItems.length === 0 && page === 1) {
                 tbody.innerHTML = '<tr><td colspan="3" style="padding: 16px; text-align: center; color: var(--text-muted);">No logs found.</td></tr>';
-                document.getElementById('pageIndicator').innerText = `Page 1 of 1`;
-                document.getElementById('prevPageBtn').disabled = true;
-                document.getElementById('nextPageBtn').disabled = true;
+                if(activeAuditTab === 'ledger') {
+                    document.getElementById('pageIndicator').innerText = `Page 1 of 1`;
+                    document.getElementById('prevPageBtn').disabled = true;
+                    document.getElementById('nextPageBtn').disabled = true;
+                }
                 return;
             }
             
@@ -460,24 +486,107 @@
                 `;
             });
             
-            const totalPages = Math.ceil(currentLedgerData.length / itemsPerPage) || 1;
-            document.getElementById('pageIndicator').innerText = `Page ${page} of ${totalPages}`;
-            document.getElementById('prevPageBtn').disabled = page === 1;
-            document.getElementById('nextPageBtn').disabled = page === totalPages;
+            if(activeAuditTab === 'ledger') {
+                const totalPages = Math.ceil(currentLedgerData.length / itemsPerPage) || 1;
+                document.getElementById('pageIndicator').innerText = `Page ${page} of ${totalPages}`;
+                document.getElementById('prevPageBtn').disabled = page === 1;
+                document.getElementById('nextPageBtn').disabled = page === totalPages;
+            }
+        }
+        
+        function renderBansPage(page) {
+            const tbody = document.getElementById('modalBansBody');
+            tbody.innerHTML = '';
+            
+            const start = (page - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            const paginatedItems = currentBansData.slice(start, end);
+            
+            if (paginatedItems.length === 0 && page === 1) {
+                tbody.innerHTML = '<tr><td colspan="5" style="padding: 16px; text-align: center; color: var(--text-muted);">No ban history found.</td></tr>';
+                if(activeAuditTab === 'bans') {
+                    document.getElementById('pageIndicator').innerText = `Page 1 of 1`;
+                    document.getElementById('prevPageBtn').disabled = true;
+                    document.getElementById('nextPageBtn').disabled = true;
+                }
+                return;
+            }
+            
+            paginatedItems.forEach(e => {
+                let actionColor = e.action === 'ban' ? '#ef4444' : '#10b981';
+                tbody.innerHTML += `
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 12px 16px; color: var(--text-main); font-size: 0.9rem;">${formatTimestamp(e.timestamp)}</td>
+                        <td style="padding: 12px 16px; color: ${actionColor}; font-weight: 500; text-transform: capitalize;">${e.action}</td>
+                        <td style="padding: 12px 16px; color: var(--text-muted); text-transform: capitalize;">${e.ban_type || '-'}</td>
+                        <td style="padding: 12px 16px; color: var(--text-muted);">${e.admin || 'Unknown'}</td>
+                        <td style="padding: 12px 16px; color: var(--text-muted); max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${e.reason || ''}">${e.reason || '-'}</td>
+                    </tr>
+                `;
+            });
+            
+            if (activeAuditTab === 'bans') {
+                const totalPages = Math.ceil(currentBansData.length / itemsPerPage) || 1;
+                document.getElementById('pageIndicator').innerText = `Page ${page} of ${totalPages}`;
+                document.getElementById('prevPageBtn').disabled = page === 1;
+                document.getElementById('nextPageBtn').disabled = page === totalPages;
+            }
         }
         
         function prevPage() {
-            if (currentPage > 1) {
-                currentPage--;
-                renderLedgerPage(currentPage);
+            if (activeAuditTab === 'ledger') {
+                if (currentLedgerPage > 1) {
+                    currentLedgerPage--;
+                    renderLedgerPage(currentLedgerPage);
+                }
+            } else {
+                if (currentBansPage > 1) {
+                    currentBansPage--;
+                    renderBansPage(currentBansPage);
+                }
             }
         }
         
         function nextPage() {
-            const totalPages = Math.ceil(currentLedgerData.length / itemsPerPage);
-            if (currentPage < totalPages) {
-                currentPage++;
-                renderLedgerPage(currentPage);
+            if (activeAuditTab === 'ledger') {
+                const totalPages = Math.ceil(currentLedgerData.length / itemsPerPage);
+                if (currentLedgerPage < totalPages) {
+                    currentLedgerPage++;
+                    renderLedgerPage(currentLedgerPage);
+                }
+            } else {
+                const totalPages = Math.ceil(currentBansData.length / itemsPerPage);
+                if (currentBansPage < totalPages) {
+                    currentBansPage++;
+                    renderBansPage(currentBansPage);
+                }
+            }
+        }
+        
+        function switchAuditTab(tab) {
+            activeAuditTab = tab;
+            if (tab === 'ledger') {
+                document.getElementById('tab-ledger').classList.add('active');
+                document.getElementById('tab-ledger').style.borderBottom = "2px solid var(--primary)";
+                document.getElementById('tab-ledger').style.color = "var(--primary)";
+                document.getElementById('tab-bans').classList.remove('active');
+                document.getElementById('tab-bans').style.borderBottom = "2px solid transparent";
+                document.getElementById('tab-bans').style.color = "var(--text-muted)";
+                
+                document.getElementById('auditTabLedger').style.display = "block";
+                document.getElementById('auditTabBans').style.display = "none";
+                renderLedgerPage(currentLedgerPage);
+            } else if (tab === 'bans') {
+                document.getElementById('tab-bans').classList.add('active');
+                document.getElementById('tab-bans').style.borderBottom = "2px solid var(--primary)";
+                document.getElementById('tab-bans').style.color = "var(--primary)";
+                document.getElementById('tab-ledger').classList.remove('active');
+                document.getElementById('tab-ledger').style.borderBottom = "2px solid transparent";
+                document.getElementById('tab-ledger').style.color = "var(--text-muted)";
+                
+                document.getElementById('auditTabBans').style.display = "block";
+                document.getElementById('auditTabLedger').style.display = "none";
+                renderBansPage(currentBansPage);
             }
         }
 
@@ -490,11 +599,18 @@
             document.getElementById('modalUuid').innerText = uuid;
             
             const isOnline = String(onlineStr).toLowerCase() === "1" || String(onlineStr).toLowerCase() === "true";
-            document.getElementById('modalStatus').innerHTML = isOnline 
+            const isBanned = String(bannedStr).toLowerCase() === "1" || String(bannedStr).toLowerCase() === "true";
+            
+            let statusHtml = isOnline 
                 ? '<span class="status-badge status-online">● Active Session</span>'
                 : '<span class="status-badge status-offline">○ Offline</span>';
+                
+            if (isBanned) {
+                statusHtml += ' <span class="status-badge status-banned">Banned</span>';
+            }
+            
+            document.getElementById('modalStatus').innerHTML = statusHtml;
 
-            const isBanned = String(bannedStr).toLowerCase() === "1" || String(bannedStr).toLowerCase() === "true";
             let actionsHtml = `<button class="btn btn-restart" style="flex: 1;" onclick="openKickModal('${username}', null)">Kick Active Session</button>`;
             if (isBanned) {
                 actionsHtml += `<button class="btn btn-outline" style="flex: 1;" onclick="moderatePlayerDirect('unban', '${username}', '${lastIp}', null)">Unban Player</button>`;
@@ -514,12 +630,28 @@
                 .then(res => res.json())
                 .then(data => {
                     currentLedgerData = data;
-                    currentPage = 1;
-                    renderLedgerPage(currentPage);
+                    currentLedgerPage = 1;
+                    if(activeAuditTab === 'ledger') renderLedgerPage(currentLedgerPage);
                 })
                 .catch(err => {
                     tbody.innerHTML = '<tr><td colspan="3" style="padding: 16px; text-align: center; color: #ef4444;">Failed to load ledger.</td></tr>';
                 });
+                
+            const bansBody = document.getElementById('modalBansBody');
+            bansBody.innerHTML = '<tr><td colspan="5" style="padding: 16px; text-align: center; color: var(--text-muted);">Loading ban history...</td></tr>';
+            
+            fetch(`/api/player/${uuid}/ban_history`)
+                .then(res => res.json())
+                .then(events => {
+                    currentBansData = events;
+                    currentBansPage = 1;
+                    if(activeAuditTab === 'bans') renderBansPage(currentBansPage);
+                })
+                .catch(err => {
+                    bansBody.innerHTML = '<tr><td colspan="5" style="padding: 16px; text-align: center; color: #ef4444;">Failed to load ban history.</td></tr>';
+                });
+                
+            switchAuditTab('ledger');
         }
 
         function closeAuditModal() {

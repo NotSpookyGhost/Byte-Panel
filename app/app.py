@@ -91,6 +91,19 @@ def init_db():
     ''')
     conn.execute("UPDATE users SET online_status = 0")
     
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS ban_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT,
+            action TEXT,
+            ban_type TEXT,
+            reason TEXT,
+            admin TEXT,
+            timestamp TEXT,
+            FOREIGN KEY(uuid) REFERENCES users(uuid)
+        )
+    ''')
+    
     try:
         conn.execute("ALTER TABLE users ADD COLUMN ban_type TEXT DEFAULT 'both'")
     except sqlite3.OperationalError:
@@ -178,8 +191,8 @@ def save_player_history(data):
         json.dump(data, f, indent=4)
 
 def sync_bans_from_server():
-    banned_uuids = set()
-    banned_ips = set()
+    banned_uuids = {}
+    banned_ips = {}
     
     bp_path = os.path.join(SERVER_DIR, "banned-players.json")
     if os.path.exists(bp_path):
@@ -188,7 +201,7 @@ def sync_bans_from_server():
                 data = json.load(f)
                 for item in data:
                     if "uuid" in item:
-                        banned_uuids.add(item["uuid"].lower())
+                        banned_uuids[item["uuid"].lower()] = item
         except:
             pass
             
@@ -199,37 +212,65 @@ def sync_bans_from_server():
                 data = json.load(f)
                 for item in data:
                     if "ip" in item:
-                        banned_ips.add(item["ip"].lower())
+                        banned_ips[item["ip"].lower()] = item
         except:
             pass
             
     conn = sqlite3.connect(PLAYER_DB_FILE)
     users = conn.execute('''
-        SELECT u.uuid,
+        SELECT u.uuid, u.ban_status,
                (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip
         FROM users u
     ''').fetchall()
     
     updates = []
+    events = []
+    now_ts = datetime.utcnow().isoformat() + "Z"
+    
     for row in users:
         uuid = row[0]
-        last_ip = row[1]
+        current_status = row[1]
+        last_ip = row[2]
         
-        is_uuid_banned = (uuid.lower() in banned_uuids)
-        is_ip_banned = (last_ip.lower() in banned_ips) if last_ip else False
+        uuid_ban_info = banned_uuids.get(uuid.lower())
+        ip_ban_info = banned_ips.get(last_ip.lower()) if last_ip else None
+        
+        is_uuid_banned = uuid_ban_info is not None
+        is_ip_banned = ip_ban_info is not None
+        
+        new_status = 1 if (is_uuid_banned or is_ip_banned) else 0
         
         if is_uuid_banned and is_ip_banned:
-            updates.append((1, 'both', uuid))
+            new_type = 'both'
         elif is_uuid_banned:
-            updates.append((1, 'uuid', uuid))
+            new_type = 'uuid'
         elif is_ip_banned:
-            updates.append((1, 'ip', uuid))
+            new_type = 'ip'
         else:
-            updates.append((0, 'none', uuid))
+            new_type = 'none'
+            
+        updates.append((new_status, new_type, uuid))
+        
+        if current_status == 0 and new_status == 1:
+            source = "Server"
+            reason = "Banned by an operator."
+            if uuid_ban_info:
+                source = uuid_ban_info.get("source", source)
+                reason = uuid_ban_info.get("reason", reason)
+            elif ip_ban_info:
+                source = ip_ban_info.get("source", source)
+                reason = ip_ban_info.get("reason", reason)
+            events.append((uuid, 'ban', new_type, reason, source, now_ts))
+            
+        elif current_status == 1 and new_status == 0:
+            events.append((uuid, 'unban', 'none', 'Unbanned', 'Server', now_ts))
             
     if updates:
         conn.executemany("UPDATE users SET ban_status = ?, ban_type = ? WHERE uuid = ?", updates)
-        conn.commit()
+    if events:
+        conn.executemany("INSERT INTO ban_events (uuid, action, ban_type, reason, admin, timestamp) VALUES (?, ?, ?, ?, ?, ?)", events)
+        
+    conn.commit()
     conn.close()
 
 def get_java_version_path(mc_version):
@@ -795,6 +836,19 @@ def get_player_history(uuid):
     conn.close()
     return jsonify([dict(row) for row in events])
 
+@app.route('/api/player/<uuid>/ban_history')
+def get_player_ban_history(uuid):
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    conn.row_factory = sqlite3.Row
+    events = conn.execute('''
+        SELECT action, ban_type, reason, admin, timestamp 
+        FROM ban_events 
+        WHERE uuid = ? 
+        ORDER BY timestamp DESC
+    ''', (uuid,)).fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in events])
+
 @app.route('/api/player/<action>', methods=['POST'])
 def moderate_player(action):
     global MINECRAFT_PROCESS
@@ -809,6 +863,15 @@ def moderate_player(action):
     if not MINECRAFT_PROCESS or MINECRAFT_PROCESS.poll() is not None:
         return jsonify({"status": "error", "message": "Server offline"})
         
+    admin_user = load_config().get("admin_user", "Admin")
+    web_panel_source = f"Web Panel: {admin_user}"
+    now_ts = datetime.utcnow().isoformat() + "Z"
+    
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    user = conn.execute("SELECT uuid, ban_type FROM users WHERE username = ?", (player_name,)).fetchone()
+    uuid = user[0] if user else None
+    stored_type = user[1] if user and user[1] else 'both'
+        
     if action == "kick":
         MINECRAFT_PROCESS.stdin.write(f"kick {player_name}{reason_str}\n")
     elif action == "ban":
@@ -817,23 +880,21 @@ def moderate_player(action):
         if ban_type in ['ip', 'both'] and ip:
             MINECRAFT_PROCESS.stdin.write(f"ban-ip {ip}{reason_str}\n")
             
-        conn = sqlite3.connect(PLAYER_DB_FILE)
-        conn.execute("UPDATE users SET ban_status = 1, ban_type = ? WHERE username = ?", (ban_type, player_name))
-        conn.commit()
-        conn.close()
+        if uuid:
+            conn.execute("UPDATE users SET ban_status = 1, ban_type = ? WHERE uuid = ?", (ban_type, uuid))
+            conn.execute("INSERT INTO ban_events (uuid, action, ban_type, reason, admin, timestamp) VALUES (?, ?, ?, ?, ?, ?)", (uuid, 'ban', ban_type, reason, web_panel_source, now_ts))
     elif action == "unban":
-        conn = sqlite3.connect(PLAYER_DB_FILE)
-        user = conn.execute("SELECT ban_type FROM users WHERE username = ?", (player_name,)).fetchone()
-        stored_type = user[0] if user and user[0] else 'both'
-        
         if stored_type in ['username', 'uuid', 'both', 'none']:
             MINECRAFT_PROCESS.stdin.write(f"pardon {player_name}\n")
         if stored_type in ['ip', 'both', 'none'] and ip:
             MINECRAFT_PROCESS.stdin.write(f"pardon-ip {ip}\n")
             
-        conn.execute("UPDATE users SET ban_status = 0, ban_type = NULL WHERE username = ?", (player_name,))
-        conn.commit()
-        conn.close()
+        if uuid:
+            conn.execute("UPDATE users SET ban_status = 0, ban_type = NULL WHERE uuid = ?", (uuid,))
+            conn.execute("INSERT INTO ban_events (uuid, action, ban_type, reason, admin, timestamp) VALUES (?, ?, ?, ?, ?, ?)", (uuid, 'unban', 'none', 'Unbanned', web_panel_source, now_ts))
+            
+    conn.commit()
+    conn.close()
         
     MINECRAFT_PROCESS.stdin.flush()
     return jsonify({"status": "success"})
