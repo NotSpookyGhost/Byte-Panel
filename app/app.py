@@ -53,6 +53,16 @@ app = Flask(__name__)
 app.secret_key = os.getenv("PANEL_SECRET_KEY", "mc-panel-secure-key-2026")
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+@app.context_processor
+def inject_version():
+    try:
+        version_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'version.txt')
+        with open(version_file_path, 'r') as f:
+            v = f.read().strip()
+    except Exception:
+        v = "Unknown"
+    return dict(app_version=f"v{v}")
+
 # --- Predefined Storage Path Architecture ---
 DATA_DIR = "/data"
 BRANDING_DIR = os.path.join(DATA_DIR, "branding")

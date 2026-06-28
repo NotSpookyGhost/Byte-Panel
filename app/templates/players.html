@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <title>Historical Players Ledger</title>
@@ -9,76 +10,143 @@
     <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
     {% endif %}
     <style>
-        .roster-table { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 20px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-        .roster-table th { 
-            padding: 16px; 
-            text-align: left; 
-            color: var(--text-muted); 
-            font-size: 0.85rem; 
-            text-transform: uppercase; 
-            letter-spacing: 0.05em; 
-            border-bottom: 1px solid var(--border); 
-            cursor: pointer; 
+        .roster-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin-top: 20px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .roster-table th {
+            padding: 16px;
+            text-align: left;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
             user-select: none;
-            background: rgba(0,0,0,0.2);
+            background: rgba(0, 0, 0, 0.2);
             transition: background 0.2s, color 0.2s;
         }
-        .roster-table th:hover { color: var(--text-main); background: rgba(0,0,0,0.4); }
-        .roster-table td { 
-            padding: 16px; 
-            border-bottom: 1px solid var(--border); 
-            vertical-align: middle; 
+
+        .roster-table th:hover {
+            color: var(--text-main);
+            background: rgba(0, 0, 0, 0.4);
         }
-        .roster-table tr:last-child td { border-bottom: none; }
-        .roster-row { 
-            transition: all 0.2s; 
-            cursor: pointer; 
+
+        .roster-table td {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
         }
-        .roster-row:hover { 
-            background-color: rgba(255, 255, 255, 0.04); 
+
+        .roster-table tr:last-child td {
+            border-bottom: none;
         }
-        .status-badge { 
-            padding: 4px 8px; 
-            border-radius: 6px; 
-            font-size: 0.75rem; 
-            font-weight: 700; 
+
+        .roster-row {
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .roster-row:hover {
+            background-color: rgba(255, 255, 255, 0.04);
+        }
+
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 700;
             display: inline-block;
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }
-        .status-online { background: rgba(16, 185, 129, 0.15); color: #10b981; }
-        .status-offline { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); }
-        .status-banned { background: rgba(239, 68, 68, 0.15); color: #ef4444; margin-left: 8px;}
-        .fw-bold { font-weight: 600; color: var(--text-main); font-size: 1.05rem; }
-        .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-        .text-sm { font-size: 0.85rem; color: var(--text-muted); }
-        .actions-cell { display: flex; gap: 8px; align-items: center; }
-        .btn-sm { padding: 6px 12px; font-size: 0.8rem; border-radius: 4px; }
-        
+
+        .status-online {
+            background: rgba(16, 185, 129, 0.15);
+            color: #10b981;
+        }
+
+        .status-offline {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+        }
+
+        .status-banned {
+            background: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+            margin-left: 8px;
+        }
+
+        .fw-bold {
+            font-weight: 600;
+            color: var(--text-main);
+            font-size: 1.05rem;
+        }
+
+        .font-mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        .text-sm {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .actions-cell {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 0.8rem;
+            border-radius: 4px;
+        }
+
         .pagination-controls {
-            display: flex; justify-content: space-between; align-items: center; margin-top: 15px;
-            padding-top: 15px; border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid var(--border);
         }
+
         .btn-outline {
-            background: transparent; border: 1px solid var(--border); color: var(--text-main); cursor: pointer;
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            cursor: pointer;
         }
+
         .btn-outline:hover:not(:disabled) {
             background: rgba(255, 255, 255, 0.1);
         }
+
         .btn-outline:disabled {
-            opacity: 0.5; cursor: not-allowed;
+            opacity: 0.5;
+            cursor: not-allowed;
         }
     </style>
     <script>
         const configTz = "{{ config.get('timezone', 'UTC') }}";
         const configTimeFormat = "{{ config.get('time_format', '12') }}";
-        
+
         function formatTimestamp(ts) {
             if (!ts) return "Unknown";
             try {
                 let safeTs = String(ts).replace(" ", "T");
                 if (!safeTs.endsWith("Z")) safeTs += "Z";
-                
+
                 const date = new Date(safeTs);
                 if (isNaN(date.getTime())) return String(ts);
 
@@ -95,6 +163,7 @@
         }
     </script>
 </head>
+
 <body class="theme-{{ config.theme_accent }}">
     <div class="sidebar">
         <div class="nav-group">
@@ -115,13 +184,14 @@
         <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
             <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
             <form action="/logout" method="GET" style="margin: 0;">
-                <button type="submit" class="btn" style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
+                <button type="submit" class="btn"
+                    style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
             </form>
         </div>
     </div>
     <div class="main-layout">
         <div class="top-action-bar">
-            <div>Database Registry</div>
+            <div>Player History</div>
         </div>
         <div class="main-content">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
@@ -132,10 +202,11 @@
                         <button class="btn btn-outline btn-sm" onclick="setFilter('offline', this)">Offline</button>
                         <button class="btn btn-outline btn-sm" onclick="setFilter('banned', this)">Banned</button>
                     </div>
-                    <input type="text" id="playerSearch" onkeyup="searchPlayers()" placeholder="Search by username..." style="padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-dark); color: var(--text-main); width: 250px; font-size: 0.9rem;">
+                    <input type="text" id="playerSearch" onkeyup="searchPlayers()" placeholder="Search by username..."
+                        style="padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-dark); color: var(--text-main); width: 250px; font-size: 0.9rem;">
                 </div>
             </div>
-            
+
             <table class="roster-table" id="rosterTable">
                 <thead>
                     <tr>
@@ -151,7 +222,8 @@
                 </thead>
                 <tbody>
                     {% for p in players %}
-                    <tr class="roster-row" onclick="openAuditModal('{{ p.uuid }}', '{{ p.username }}', '{{ p.online_status }}', '{{ p.last_ip }}', '{{ p.ban_status }}')">
+                    <tr class="roster-row"
+                        onclick="openAuditModal('{{ p.uuid }}', '{{ p.username }}', '{{ p.online_status }}', '{{ p.last_ip }}', '{{ p.ban_status }}')">
                         <td>
                             {% if p.online_status %}
                             <span class="status-badge status-online">Online</span>
@@ -162,18 +234,25 @@
                             <span class="status-badge status-banned">Banned</span>
                             {% endif %}
                         </td>
-                        <td><img src="https://minotar.net/helm/{{ p.username }}/36.png" alt="skin" style="border-radius: 6px; width: 36px; height: 36px; display: block; image-rendering: pixelated;"></td>
+                        <td><img src="https://minotar.net/helm/{{ p.username }}/36.png" alt="skin"
+                                style="border-radius: 6px; width: 36px; height: 36px; display: block; image-rendering: pixelated;">
+                        </td>
                         <td class="fw-bold">{{ p.username }}</td>
                         <td class="font-mono text-sm">{{ p.uuid }}</td>
-                        <td class="text-sm"><script>document.write(formatTimestamp("{{ p.last_seen }}"));</script></td>
+                        <td class="text-sm">
+                            <script>document.write(formatTimestamp("{{ p.last_seen }}"));</script>
+                        </td>
                         <td class="font-mono text-sm">{{ p.last_ip }}</td>
                         <td class="text-sm">🌍 {{ p.country }}</td>
                         <td class="actions-cell">
-                            <button class="btn btn-restart btn-sm" onclick="openKickModal('{{ p.username }}', event)">Kick</button>
+                            <button class="btn btn-restart btn-sm"
+                                onclick="openKickModal('{{ p.username }}', event)">Kick</button>
                             {% if p.ban_status %}
-                            <button class="btn btn-outline btn-sm" onclick="moderatePlayerDirect('unban', '{{ p.username }}', '{{ p.last_ip }}', event)">Unban</button>
+                            <button class="btn btn-outline btn-sm"
+                                onclick="moderatePlayerDirect('unban', '{{ p.username }}', '{{ p.last_ip }}', event)">Unban</button>
                             {% else %}
-                            <button class="btn btn-stop btn-sm" onclick="openBanModal('{{ p.username }}', '{{ p.last_ip }}', event)">Ban</button>
+                            <button class="btn btn-stop btn-sm"
+                                onclick="openBanModal('{{ p.username }}', '{{ p.last_ip }}', event)">Ban</button>
                             {% endif %}
                         </td>
                     </tr>
@@ -182,71 +261,101 @@
             </table>
         </div>
     </div>
-    
+
     <!-- Kick Modal -->
-    <div id="kickModal" onclick="if(event.target === this) closeKickModal()" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1050; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
-        <div class="card" style="width: 400px; max-width: 90%; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+    <div id="kickModal" onclick="if(event.target === this) closeKickModal()"
+        style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1050; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
+        <div class="card"
+            style="width: 400px; max-width: 90%; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
             <h3 style="margin-top: 0; color: var(--text-main);">Kick Player</h3>
-            <p style="color: var(--text-muted); margin-bottom: 15px;">Reason for kicking <span id="kickTarget" class="fw-bold" style="color: var(--text-main);"></span>:</p>
-            <input type="text" id="kickReason" style="width: 100%; box-sizing: border-box; margin-bottom: 20px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;" placeholder="Optional reason..." onkeydown="if(event.key === 'Enter') executeKick()">
+            <p style="color: var(--text-muted); margin-bottom: 15px;">Reason for kicking <span id="kickTarget"
+                    class="fw-bold" style="color: var(--text-main);"></span>:</p>
+            <input type="text" id="kickReason"
+                style="width: 100%; box-sizing: border-box; margin-bottom: 20px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;"
+                placeholder="Optional reason..." onkeydown="if(event.key === 'Enter') executeKick()">
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="btn btn-outline" onclick="closeKickModal()">Cancel</button>
                 <button class="btn btn-restart" onclick="executeKick()">Confirm Kick</button>
             </div>
         </div>
     </div>
-    
+
     <!-- Ban Modal -->
-    <div id="banModal" onclick="if(event.target === this) closeBanModal()" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1050; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
-        <div class="card" style="width: 400px; max-width: 90%; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+    <div id="banModal" onclick="if(event.target === this) closeBanModal()"
+        style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1050; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
+        <div class="card"
+            style="width: 400px; max-width: 90%; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
             <h3 style="margin-top: 0; color: var(--text-main);">Ban Player</h3>
-            <p style="color: var(--text-muted); margin-bottom: 15px;">Ban settings for <span id="banTarget" class="fw-bold" style="color: var(--text-main);"></span>:</p>
-            <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-muted);">Ban Target</label>
-            <select id="banType" style="width: 100%; box-sizing: border-box; margin-bottom: 15px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;">
+            <p style="color: var(--text-muted); margin-bottom: 15px;">Ban settings for <span id="banTarget"
+                    class="fw-bold" style="color: var(--text-main);"></span>:</p>
+            <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-muted);">Ban
+                Target</label>
+            <select id="banType"
+                style="width: 100%; box-sizing: border-box; margin-bottom: 15px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;">
                 <option value="both">Both (Username + IP)</option>
                 <option value="username">Username Only</option>
                 <option value="ip">IP Address Only</option>
             </select>
-            <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-muted);">Reason</label>
-            <input type="text" id="banReason" style="width: 100%; box-sizing: border-box; margin-bottom: 20px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;" placeholder="Optional reason..." onkeydown="if(event.key === 'Enter') executeBan()">
+            <label
+                style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-muted);">Reason</label>
+            <input type="text" id="banReason"
+                style="width: 100%; box-sizing: border-box; margin-bottom: 20px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;"
+                placeholder="Optional reason..." onkeydown="if(event.key === 'Enter') executeBan()">
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="btn btn-outline" onclick="closeBanModal()">Cancel</button>
                 <button class="btn btn-stop" onclick="executeBan()">Confirm Ban</button>
             </div>
         </div>
     </div>
-    
+
     <!-- Security Audit Modal -->
-    <div id="auditModal" onclick="if(event.target === this) closeAuditModal()" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
-        <div class="card" style="width: 800px; height: 750px; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px;">
+    <div id="auditModal" onclick="if(event.target === this) closeAuditModal()"
+        style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
+        <div class="card"
+            style="width: 800px; height: 750px; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+            <div
+                style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px;">
                 <div style="display: flex; align-items: center; gap: 15px;">
-                    <img id="modalHead" src="" alt="skin" style="width: 56px; height: 56px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); image-rendering: pixelated;">
+                    <img id="modalHead" src="" alt="skin"
+                        style="width: 56px; height: 56px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); image-rendering: pixelated;">
                     <div>
                         <h2 id="modalUsername" style="margin: 0; color: var(--text-main); font-size: 1.4rem;"></h2>
-                        <div id="modalUuid" style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted); margin-top: 4px;"></div>
+                        <div id="modalUuid"
+                            style="font-family: monospace; font-size: 0.9rem; color: var(--text-muted); margin-top: 4px;">
+                        </div>
                         <div id="modalStatus" style="font-size: 0.9rem; margin-top: 6px;"></div>
                     </div>
                 </div>
                 <button class="btn btn-outline" onclick="closeAuditModal()" style="padding: 8px 16px;">Close</button>
             </div>
-            
+
             <div id="auditModalActions" style="display: flex; gap: 12px; margin-bottom: 20px;">
                 <!-- Populated dynamically based on ban status -->
             </div>
-            
+
             <div class="modal-tabs" style="display: flex; border-bottom: 1px solid var(--border); margin-bottom: 15px;">
-                <button class="tab-btn active" onclick="switchAuditTab('ledger')" id="tab-ledger" style="background: none; border: none; border-bottom: 2px solid var(--primary); color: var(--primary); padding: 10px 20px; cursor: pointer; font-weight: 500;">Login Ledger</button>
-                <button class="tab-btn" onclick="switchAuditTab('bans')" id="tab-bans" style="background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); padding: 10px 20px; cursor: pointer; font-weight: 500;">Ban History</button>
+                <button class="tab-btn active" onclick="switchAuditTab('ledger')" id="tab-ledger"
+                    style="background: none; border: none; border-bottom: 2px solid var(--primary); color: var(--primary); padding: 10px 20px; cursor: pointer; font-weight: 500;">Login
+                    Ledger</button>
+                <button class="tab-btn" onclick="switchAuditTab('bans')" id="tab-bans"
+                    style="background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-muted); padding: 10px 20px; cursor: pointer; font-weight: 500;">Ban
+                    History</button>
             </div>
-            
-            <div id="auditTabLedger" style="flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--bg-dark);">
+
+            <div id="auditTabLedger"
+                style="flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--bg-dark);">
                 <table style="width: 100%; border-collapse: collapse; text-align: left;">
                     <thead>
                         <tr style="border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02);">
-                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Timestamp</th>
-                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">IP Address</th>
-                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Country</th>
+                            <th
+                                style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">
+                                Timestamp</th>
+                            <th
+                                style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">
+                                IP Address</th>
+                            <th
+                                style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">
+                                Country</th>
                         </tr>
                     </thead>
                     <tbody id="modalLedgerBody">
@@ -254,16 +363,27 @@
                     </tbody>
                 </table>
             </div>
-            
-            <div id="auditTabBans" style="display: none; flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--bg-dark);">
+
+            <div id="auditTabBans"
+                style="display: none; flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0; background: var(--bg-dark);">
                 <table style="width: 100%; border-collapse: collapse; text-align: left;">
                     <thead>
                         <tr style="border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02);">
-                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Date</th>
-                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Action</th>
-                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Type</th>
-                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Admin</th>
-                            <th style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">Reason</th>
+                            <th
+                                style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">
+                                Date</th>
+                            <th
+                                style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">
+                                Action</th>
+                            <th
+                                style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">
+                                Type</th>
+                            <th
+                                style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">
+                                Admin</th>
+                            <th
+                                style="padding: 12px 16px; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase;">
+                                Reason</th>
                         </tr>
                     </thead>
                     <tbody id="modalBansBody">
@@ -271,10 +391,11 @@
                     </tbody>
                 </table>
             </div>
-            
+
             <div class="pagination-controls">
                 <button id="prevPageBtn" class="btn btn-outline btn-sm" onclick="prevPage()">Previous</button>
-                <span id="pageIndicator" style="font-size: 0.9rem; color: var(--text-muted); font-weight: 500;">Page 1 of 1</span>
+                <span id="pageIndicator" style="font-size: 0.9rem; color: var(--text-muted); font-weight: 500;">Page 1
+                    of 1</span>
                 <button id="nextPageBtn" class="btn btn-outline btn-sm" onclick="nextPage()">Next</button>
             </div>
         </div>
@@ -285,19 +406,19 @@
     <script>
         let currentModalUsername = "";
         let currentModalIp = "";
-        
+
         let currentLedgerData = [];
         let currentLedgerPage = 1;
         let currentBansData = [];
         let currentBansPage = 1;
         let activeAuditTab = 'ledger';
         const itemsPerPage = 10;
-        
+
         let currentFilter = 'all';
         function setFilter(filter, btnElement) {
             currentFilter = filter;
             document.querySelectorAll('.filter-group button').forEach(b => b.classList.remove('active'));
-            if(btnElement) btnElement.classList.add('active');
+            if (btnElement) btnElement.classList.add('active');
             searchPlayers();
         }
 
@@ -306,20 +427,20 @@
             const input = document.getElementById('playerSearch').value.toLowerCase();
             const table = document.getElementById("rosterTable");
             const tr = Array.from(table.tBodies[0].getElementsByTagName("tr"));
-            
+
             tr.forEach(row => {
                 const usernameCell = row.cells[2];
                 const statusCell = row.cells[0];
                 if (usernameCell && statusCell) {
                     const username = (usernameCell.textContent || usernameCell.innerText).toLowerCase();
                     const statusText = (statusCell.textContent || statusCell.innerText).toLowerCase();
-                    
+
                     const matchesSearch = username.indexOf(input) > -1;
                     let matchesFilter = true;
-                    if(currentFilter === 'online' && statusText.indexOf('online') === -1) matchesFilter = false;
-                    if(currentFilter === 'offline' && statusText.indexOf('offline') === -1) matchesFilter = false;
-                    if(currentFilter === 'banned' && statusText.indexOf('banned') === -1) matchesFilter = false;
-                    
+                    if (currentFilter === 'online' && statusText.indexOf('online') === -1) matchesFilter = false;
+                    if (currentFilter === 'offline' && statusText.indexOf('offline') === -1) matchesFilter = false;
+                    if (currentFilter === 'banned' && statusText.indexOf('banned') === -1) matchesFilter = false;
+
                     if (matchesSearch && matchesFilter) {
                         row.style.display = "";
                     } else {
@@ -328,29 +449,29 @@
                 }
             });
         }
-        
+
         function sortTable(columnIndex, type) {
             const table = document.getElementById("rosterTable");
             const tbody = table.tBodies[0];
             const rows = Array.from(tbody.querySelectorAll("tr"));
-            
+
             sortDirection = !sortDirection;
-            
+
             rows.sort((a, b) => {
                 let cellA = a.cells[columnIndex].innerText.trim().toLowerCase();
                 let cellB = b.cells[columnIndex].innerText.trim().toLowerCase();
-                
+
                 if (type === 'date') {
                     cellA = new Date(cellA).getTime() || 0;
                     cellB = new Date(cellB).getTime() || 0;
                     return sortDirection ? cellA - cellB : cellB - cellA;
                 }
-                
+
                 if (cellA < cellB) return sortDirection ? -1 : 1;
                 if (cellA > cellB) return sortDirection ? 1 : -1;
                 return 0;
             });
-            
+
             tbody.innerHTML = '';
             rows.forEach(row => tbody.appendChild(row));
         }
@@ -377,7 +498,7 @@
 
         let activeKickUser = "";
         function openKickModal(username, event) {
-            if(event) event.stopPropagation();
+            if (event) event.stopPropagation();
             activeKickUser = username;
             document.getElementById('kickTarget').innerText = username;
             document.getElementById('kickReason').value = "";
@@ -397,7 +518,7 @@
                 if (data.status === 'success') {
                     showToast('Executed KICK on ' + activeKickUser, '#ca8a04');
                     closeKickModal();
-                    if(document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
+                    if (document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
                     fetchPlayers(true);
                 } else {
                     showToast("Error: " + data.message, "#dc2626");
@@ -408,7 +529,7 @@
         let activeBanUser = "";
         let activeBanIp = "";
         function openBanModal(username, ip, event) {
-            if(event) event.stopPropagation();
+            if (event) event.stopPropagation();
             activeBanUser = username;
             activeBanIp = ip;
             document.getElementById('banTarget').innerText = username;
@@ -431,7 +552,7 @@
                 if (data.status === 'success') {
                     showToast('Executed BAN on ' + activeBanUser, '#dc2626');
                     closeBanModal();
-                    if(document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
+                    if (document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
                     fetchPlayers(true);
                 } else {
                     showToast("Error: " + data.message, "#dc2626");
@@ -446,36 +567,36 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username: username, ip: ip })
             })
-            .then(res => res.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    showToast(`Executed ${action.toUpperCase()} on ${username}`, action === 'ban' ? '#dc2626' : '#ca8a04');
-                    if(document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
-                    fetchPlayers(true);
-                } else {
-                    showToast("Error: " + data.message, "#dc2626");
-                }
-            });
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        showToast(`Executed ${action.toUpperCase()} on ${username}`, action === 'ban' ? '#dc2626' : '#ca8a04');
+                        if (document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
+                        fetchPlayers(true);
+                    } else {
+                        showToast("Error: " + data.message, "#dc2626");
+                    }
+                });
         }
 
         function renderLedgerPage(page) {
             const tbody = document.getElementById('modalLedgerBody');
             tbody.innerHTML = '';
-            
+
             const start = (page - 1) * itemsPerPage;
             const end = start + itemsPerPage;
             const paginatedItems = currentLedgerData.slice(start, end);
-            
+
             if (paginatedItems.length === 0 && page === 1) {
                 tbody.innerHTML = '<tr><td colspan="3" style="padding: 16px; text-align: center; color: var(--text-muted);">No logs found.</td></tr>';
-                if(activeAuditTab === 'ledger') {
+                if (activeAuditTab === 'ledger') {
                     document.getElementById('pageIndicator').innerText = `Page 1 of 1`;
                     document.getElementById('prevPageBtn').disabled = true;
                     document.getElementById('nextPageBtn').disabled = true;
                 }
                 return;
             }
-            
+
             paginatedItems.forEach(row => {
                 tbody.innerHTML += `
                     <tr style="border-bottom: 1px solid var(--border);">
@@ -485,33 +606,33 @@
                     </tr>
                 `;
             });
-            
-            if(activeAuditTab === 'ledger') {
+
+            if (activeAuditTab === 'ledger') {
                 const totalPages = Math.ceil(currentLedgerData.length / itemsPerPage) || 1;
                 document.getElementById('pageIndicator').innerText = `Page ${page} of ${totalPages}`;
                 document.getElementById('prevPageBtn').disabled = page === 1;
                 document.getElementById('nextPageBtn').disabled = page === totalPages;
             }
         }
-        
+
         function renderBansPage(page) {
             const tbody = document.getElementById('modalBansBody');
             tbody.innerHTML = '';
-            
+
             const start = (page - 1) * itemsPerPage;
             const end = start + itemsPerPage;
             const paginatedItems = currentBansData.slice(start, end);
-            
+
             if (paginatedItems.length === 0 && page === 1) {
                 tbody.innerHTML = '<tr><td colspan="5" style="padding: 16px; text-align: center; color: var(--text-muted);">No ban history found.</td></tr>';
-                if(activeAuditTab === 'bans') {
+                if (activeAuditTab === 'bans') {
                     document.getElementById('pageIndicator').innerText = `Page 1 of 1`;
                     document.getElementById('prevPageBtn').disabled = true;
                     document.getElementById('nextPageBtn').disabled = true;
                 }
                 return;
             }
-            
+
             paginatedItems.forEach(e => {
                 let actionColor = e.action === 'ban' ? '#ef4444' : '#10b981';
                 tbody.innerHTML += `
@@ -524,7 +645,7 @@
                     </tr>
                 `;
             });
-            
+
             if (activeAuditTab === 'bans') {
                 const totalPages = Math.ceil(currentBansData.length / itemsPerPage) || 1;
                 document.getElementById('pageIndicator').innerText = `Page ${page} of ${totalPages}`;
@@ -532,7 +653,7 @@
                 document.getElementById('nextPageBtn').disabled = page === totalPages;
             }
         }
-        
+
         function prevPage() {
             if (activeAuditTab === 'ledger') {
                 if (currentLedgerPage > 1) {
@@ -546,7 +667,7 @@
                 }
             }
         }
-        
+
         function nextPage() {
             if (activeAuditTab === 'ledger') {
                 const totalPages = Math.ceil(currentLedgerData.length / itemsPerPage);
@@ -562,7 +683,7 @@
                 }
             }
         }
-        
+
         function switchAuditTab(tab) {
             activeAuditTab = tab;
             if (tab === 'ledger') {
@@ -572,7 +693,7 @@
                 document.getElementById('tab-bans').classList.remove('active');
                 document.getElementById('tab-bans').style.borderBottom = "2px solid transparent";
                 document.getElementById('tab-bans').style.color = "var(--text-muted)";
-                
+
                 document.getElementById('auditTabLedger').style.display = "block";
                 document.getElementById('auditTabBans').style.display = "none";
                 renderLedgerPage(currentLedgerPage);
@@ -583,7 +704,7 @@
                 document.getElementById('tab-ledger').classList.remove('active');
                 document.getElementById('tab-ledger').style.borderBottom = "2px solid transparent";
                 document.getElementById('tab-ledger').style.color = "var(--text-muted)";
-                
+
                 document.getElementById('auditTabBans').style.display = "block";
                 document.getElementById('auditTabLedger').style.display = "none";
                 renderBansPage(currentBansPage);
@@ -593,22 +714,22 @@
         function openAuditModal(uuid, username, onlineStr, lastIp, bannedStr) {
             currentModalUsername = username;
             currentModalIp = lastIp;
-            
+
             document.getElementById('modalHead').src = `https://minotar.net/helm/${username}/56.png`;
             document.getElementById('modalUsername').innerText = username;
             document.getElementById('modalUuid').innerText = uuid;
-            
+
             const isOnline = String(onlineStr).toLowerCase() === "1" || String(onlineStr).toLowerCase() === "true";
             const isBanned = String(bannedStr).toLowerCase() === "1" || String(bannedStr).toLowerCase() === "true";
-            
-            let statusHtml = isOnline 
+
+            let statusHtml = isOnline
                 ? '<span class="status-badge status-online">● Active Session</span>'
                 : '<span class="status-badge status-offline">○ Offline</span>';
-                
+
             if (isBanned) {
                 statusHtml += ' <span class="status-badge status-banned">Banned</span>';
             }
-            
+
             document.getElementById('modalStatus').innerHTML = statusHtml;
 
             let actionsHtml = `<button class="btn btn-restart" style="flex: 1;" onclick="openKickModal('${username}', null)">Kick Active Session</button>`;
@@ -618,39 +739,39 @@
                 actionsHtml += `<button class="btn btn-stop" style="flex: 1;" onclick="openBanModal('${username}', '${lastIp}', null)">Execute Ban</button>`;
             }
             document.getElementById('auditModalActions').innerHTML = actionsHtml;
-                
+
             document.getElementById('auditModal').style.display = 'flex';
-            
+
             const tbody = document.getElementById('modalLedgerBody');
             tbody.innerHTML = '<tr><td colspan="3" style="padding: 16px; text-align: center; color: var(--text-muted);">Loading ledger...</td></tr>';
             document.getElementById('prevPageBtn').disabled = true;
             document.getElementById('nextPageBtn').disabled = true;
-            
+
             fetch(`/api/player/${uuid}/history`)
                 .then(res => res.json())
                 .then(data => {
                     currentLedgerData = data;
                     currentLedgerPage = 1;
-                    if(activeAuditTab === 'ledger') renderLedgerPage(currentLedgerPage);
+                    if (activeAuditTab === 'ledger') renderLedgerPage(currentLedgerPage);
                 })
                 .catch(err => {
                     tbody.innerHTML = '<tr><td colspan="3" style="padding: 16px; text-align: center; color: #ef4444;">Failed to load ledger.</td></tr>';
                 });
-                
+
             const bansBody = document.getElementById('modalBansBody');
             bansBody.innerHTML = '<tr><td colspan="5" style="padding: 16px; text-align: center; color: var(--text-muted);">Loading ban history...</td></tr>';
-            
+
             fetch(`/api/player/${uuid}/ban_history`)
                 .then(res => res.json())
                 .then(events => {
                     currentBansData = events;
                     currentBansPage = 1;
-                    if(activeAuditTab === 'bans') renderBansPage(currentBansPage);
+                    if (activeAuditTab === 'bans') renderBansPage(currentBansPage);
                 })
                 .catch(err => {
                     bansBody.innerHTML = '<tr><td colspan="5" style="padding: 16px; text-align: center; color: #ef4444;">Failed to load ban history.</td></tr>';
                 });
-                
+
             switchAuditTab('ledger');
         }
 
@@ -661,26 +782,26 @@
         function fetchPlayers(skipSync = false) {
             const url = '/api/players' + (skipSync ? '?skipSync=1' : '');
             fetch(url)
-            .then(r => r.json())
-            .then(players => {
-                const tbody = document.getElementById("rosterTable").tBodies[0];
-                tbody.innerHTML = '';
-                players.forEach(p => {
-                    const tr = document.createElement('tr');
-                    tr.className = 'roster-row';
-                    tr.onclick = () => openAuditModal(p.uuid, p.username, p.online_status, p.last_ip, p.ban_status);
-                    
-                    let statusHtml = p.online_status ? '<span class="status-badge status-online">Online</span>' : '<span class="status-badge status-offline">Offline</span>';
-                    if (p.ban_status) statusHtml += ' <span class="status-badge status-banned">Banned</span>';
-                    
-                    let actionsHtml = `<button class="btn btn-restart btn-sm" onclick="openKickModal('${p.username}', event)">Kick</button> `;
-                    if (p.ban_status) {
-                        actionsHtml += `<button class="btn btn-outline btn-sm" onclick="moderatePlayerDirect('unban', '${p.username}', '${p.last_ip}', event)">Unban</button>`;
-                    } else {
-                        actionsHtml += `<button class="btn btn-stop btn-sm" onclick="openBanModal('${p.username}', '${p.last_ip}', event)">Ban</button>`;
-                    }
-                    
-                    tr.innerHTML = `
+                .then(r => r.json())
+                .then(players => {
+                    const tbody = document.getElementById("rosterTable").tBodies[0];
+                    tbody.innerHTML = '';
+                    players.forEach(p => {
+                        const tr = document.createElement('tr');
+                        tr.className = 'roster-row';
+                        tr.onclick = () => openAuditModal(p.uuid, p.username, p.online_status, p.last_ip, p.ban_status);
+
+                        let statusHtml = p.online_status ? '<span class="status-badge status-online">Online</span>' : '<span class="status-badge status-offline">Offline</span>';
+                        if (p.ban_status) statusHtml += ' <span class="status-badge status-banned">Banned</span>';
+
+                        let actionsHtml = `<button class="btn btn-restart btn-sm" onclick="openKickModal('${p.username}', event)">Kick</button> `;
+                        if (p.ban_status) {
+                            actionsHtml += `<button class="btn btn-outline btn-sm" onclick="moderatePlayerDirect('unban', '${p.username}', '${p.last_ip}', event)">Unban</button>`;
+                        } else {
+                            actionsHtml += `<button class="btn btn-stop btn-sm" onclick="openBanModal('${p.username}', '${p.last_ip}', event)">Ban</button>`;
+                        }
+
+                        tr.innerHTML = `
                         <td>${statusHtml}</td>
                         <td><img src="https://minotar.net/helm/${p.username}/36.png" alt="skin" style="border-radius: 6px; width: 36px; height: 36px; display: block; image-rendering: pixelated;"></td>
                         <td class="fw-bold">${p.username}</td>
@@ -690,15 +811,21 @@
                         <td class="text-sm">🌍 ${p.country || 'Unknown'}</td>
                         <td class="actions-cell">${actionsHtml}</td>
                     `;
-                    tbody.appendChild(tr);
+                        tbody.appendChild(tr);
+                    });
+                    searchPlayers();
                 });
-                searchPlayers();
-            });
         }
 
         {% if config.is_running %}
         setInterval(fetchPlayers, 10000);
         {% endif %}
     </script>
+    <div
+        style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
+        <div>{{ app_version }}</div>
+        <div>bytedev.app &copy; 2026</div>
+    </div>
 </body>
+
 </html>
