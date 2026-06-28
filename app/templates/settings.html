@@ -45,8 +45,16 @@
                 <p style="color: var(--text-muted); margin-top: 4px;">Configure panel runtime environments and layout customization properties.</p>
             </div>
 
+            <div id="unsavedChangesBar" style="display: none; background-color: var(--bg-panel); border: 1px solid var(--accent); border-radius: 8px; padding: 12px 24px; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.2); margin-bottom: 24px; position: sticky; top: 0; z-index: 100;">
+                <div style="font-weight: 600; color: var(--text-main);">Unsaved Changes Detected</div>
+                <div style="display: flex; gap: 12px;">
+                    <button type="button" class="btn btn-outline" id="btnRevertChanges">Revert</button>
+                    <button type="button" class="btn btn-primary" id="btnApplyChanges">Apply Changes</button>
+                </div>
+            </div>
+
             <div class="card">
-                <form method="POST" enctype="multipart/form-data">
+                <form id="settingsForm" method="POST" enctype="multipart/form-data">
                     
                     <details open>
                         <summary>Environment Core Settings</summary>
@@ -192,6 +200,87 @@
                             themeSelect.addEventListener('change', updatePreview);
                             
                             updatePreview();
+
+                            // Unsaved Changes Logic
+                            const form = document.getElementById('settingsForm');
+                            const initialValues = {};
+                            let hasUnsavedChanges = false;
+                            const unsavedBar = document.getElementById('unsavedChangesBar');
+                            
+                            Array.from(form.elements).forEach(el => {
+                                if (el.name) {
+                                    if (el.type === 'file') {
+                                        initialValues[el.name] = '';
+                                    } else if (el.type === 'checkbox' || el.type === 'radio') {
+                                        initialValues[el.name] = el.checked;
+                                    } else {
+                                        initialValues[el.name] = el.value;
+                                    }
+                                }
+                            });
+
+                            function checkChanges() {
+                                let changed = false;
+                                Array.from(form.elements).forEach(el => {
+                                    if (el.name) {
+                                        if (el.type === 'file') {
+                                            if (el.value !== '') changed = true;
+                                        } else if (el.type === 'checkbox' || el.type === 'radio') {
+                                            if (el.checked !== initialValues[el.name]) changed = true;
+                                        } else {
+                                            if (el.value !== initialValues[el.name]) changed = true;
+                                        }
+                                    }
+                                });
+                                hasUnsavedChanges = changed;
+                                unsavedBar.style.display = changed ? 'flex' : 'none';
+                            }
+
+                            form.addEventListener('input', checkChanges);
+                            form.addEventListener('change', checkChanges);
+
+                            document.getElementById('btnRevertChanges').addEventListener('click', () => {
+                                Array.from(form.elements).forEach(el => {
+                                    if (el.name) {
+                                        if (el.type === 'file') {
+                                            el.value = '';
+                                        } else if (el.type === 'checkbox' || el.type === 'radio') {
+                                            el.checked = initialValues[el.name];
+                                        } else {
+                                            el.value = initialValues[el.name];
+                                        }
+                                    }
+                                });
+                                checkChanges();
+                                updatePreview();
+                            });
+
+                            document.getElementById('btnApplyChanges').addEventListener('click', () => {
+                                form.submit();
+                            });
+
+                            // Navigation Intercept Logic
+                            let targetUrl = '';
+                            document.querySelectorAll('.sidebar a').forEach(link => {
+                                link.addEventListener('click', (e) => {
+                                    if (hasUnsavedChanges) {
+                                        e.preventDefault();
+                                        targetUrl = link.href;
+                                        document.getElementById('unsavedModal').style.display = 'flex';
+                                    }
+                                });
+                            });
+
+                            document.getElementById('btnModalRevert').addEventListener('click', () => {
+                                window.location.href = targetUrl;
+                            });
+
+                            document.getElementById('btnModalApply').addEventListener('click', () => {
+                                const fd = new FormData(form);
+                                fetch('/settings', { method: 'POST', body: fd }).then(() => {
+                                    window.location.href = targetUrl;
+                                });
+                            });
                         });
                     </script>
 
@@ -410,6 +499,16 @@
             }
         }
     </script>
+    <div id="unsavedModal" class="modal-overlay" style="display: none;">
+        <div class="modal-box">
+            <h3 class="modal-title">Unsaved Changes</h3>
+            <p class="modal-msg">You have unsaved changes. Do you want to apply them before leaving?</p>
+            <div class="modal-actions">
+                <button class="btn btn-outline" id="btnModalRevert">Discard</button>
+                <button class="btn btn-primary" id="btnModalApply">Apply Changes</button>
+            </div>
+        </div>
+    </div>
     <div style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
         <div>{{ app_version }}</div>
         <div>bytedev.app &copy; 2026</div>
