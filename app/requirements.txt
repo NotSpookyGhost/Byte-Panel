@@ -2,3 +2,4 @@ Flask==3.0.2
 Flask-SocketIO==5.3.6
 requests==2.31.0
 psutil==5.9.8
+geoip2==4.8.0
