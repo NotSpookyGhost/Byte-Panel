@@ -135,22 +135,7 @@ def ensure_geoip_db():
 init_db()
 ensure_geoip_db()
 
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        return {
-            "panel_name": "ByteDev Webpanel",
-            "theme_accent": "default",
-            "admin_user": "admin",
-            "admin_pass": "admin",
-            "cpu_limit": 0,
-            "target_state": "Offline"
-        }
-    with open(CONFIG_FILE, "r") as f:
-        return json.load(f)
 
-def save_config(config):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=4)
 
 # --- Global State Variables ---
 MINECRAFT_PROCESS = None
@@ -164,10 +149,10 @@ DEFAULT_CONFIG = {
     "mc_version": "",
     "server_type": "",
     "java_path": "",
-    "theme_accent": "emerald",
+    "theme": "dark",
     "panel_name": "Portal Node",
-    "login_blur": "5",
-    "login_tint": "rgba(11, 11, 12, 0.6)",
+    "bg_blur": 5,
+    "bg_tint": 50,
     "timezone": "UTC",
     "time_format": "12"
 }
@@ -177,9 +162,13 @@ def load_config():
     if not os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "w") as f:
             json.dump(DEFAULT_CONFIG, f, indent=4)
-        return DEFAULT_CONFIG
+        return DEFAULT_CONFIG.copy()
     with open(CONFIG_FILE, "r") as f:
-        return json.load(f)
+        conf = json.load(f)
+        for k, v in DEFAULT_CONFIG.items():
+            if k not in conf:
+                conf[k] = v
+        return conf
 
 def save_config(config):
     with open(CONFIG_FILE, "w") as f:
@@ -920,11 +909,11 @@ def get_custom_assets_state():
 def settings():
     config = load_config()
     if request.method == 'POST':
-        config['theme_accent'] = request.form.get('theme_accent', config.get('theme_accent'))
+        config['theme'] = request.form.get('theme', config.get('theme', 'dark'))
         config['java_path'] = request.form.get('java_path', config.get('java_path'))
         config['panel_name'] = request.form.get('panel_name', config.get('panel_name'))
-        config['login_blur'] = request.form.get('login_blur', config.get('login_blur'))
-        config['login_tint'] = request.form.get('login_tint', config.get('login_tint'))
+        config['bg_blur'] = request.form.get('bg_blur', config.get('bg_blur', 25))
+        config['bg_tint'] = request.form.get('bg_tint', config.get('bg_tint', 50))
         config['timezone'] = request.form.get('timezone', config.get('timezone', 'UTC'))
         config['time_format'] = request.form.get('time_format', config.get('time_format', '12'))
         

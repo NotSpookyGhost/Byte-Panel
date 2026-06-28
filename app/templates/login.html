@@ -9,8 +9,9 @@
     <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
     {% endif %}
 </head>
-<body style="justify-content:center; align-items:center; background: linear-gradient(rgba(0,0,0,0.5), rgba(0,0,0,0.5)), url('{% if has_custom.bg %}/branding-assets/bg.jpg{% else %}{{ url_for('static', filename='bg.jpg') }}{% endif %}') no-repeat center center fixed; background-size: cover; color: var(--text-main); margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; display: flex; height: 100vh;">
-    <div class="card" style="width: 380px;">
+<body class="theme-{{ config.theme }}" style="background: url('{% if has_custom.bg %}/branding-assets/bg.jpg{% else %}{{ url_for('static', filename='bg.jpg') }}{% endif %}') no-repeat center center fixed; background-size: cover; color: var(--text-main); margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; height: 100vh;">
+    <div style="position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,{{ (config.get('bg_tint', 50) | float) / 100 }}); backdrop-filter: blur({{ config.get('bg_blur', 5) }}px); -webkit-backdrop-filter: blur({{ config.get('bg_blur', 5) }}px);">
+        <div class="card" style="width: 380px; z-index: 10;">
         <h2>🔐 Core Authorization</h2>
         {% if error %}<p style="color:var(--accent-crimson);">{{ error }}</p>{% endif %}
         <form method="POST">
@@ -22,6 +23,7 @@
             </div>
             <button type="submit" class="btn btn-primary" style="width:100%;">Authenticate</button>
         </form>
+        </div>
     </div>
     <div style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
         <div>{{ app_version }}</div>

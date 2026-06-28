@@ -11,7 +11,7 @@
     <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
     {% endif %}
 </head>
-<body class="theme-{{ config.theme_accent }}">
+<body class="theme-{{ config.theme }}">
 
     <div class="sidebar">
             <div class="nav-group">
@@ -86,50 +86,114 @@
                             </select>
                         </div>
 
-                        <div style="margin-bottom: 8px;">
-                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">UI Accent Theme Color</label>
-                            <select name="theme_accent">
-                                <option value="emerald" {% if config.theme_accent == 'emerald' %}selected{% endif %}>Emerald Green</option>
-                                <option value="sapphire" {% if config.theme_accent == 'sapphire' %}selected{% endif %}>Sapphire Blue</option>
-                                <option value="slate" {% if config.theme_accent == 'slate' %}selected{% endif %}>Industrial Slate</option>
-                                <option value="crimson" {% if config.theme_accent == 'crimson' %}selected{% endif %}>Crimson Red</option>
-                            </select>
-                        </div>
+
                     </details>
 
                     <details>
-                        <summary>Appearance Settings</summary>
-                        <div style="margin-top: 16px; margin-bottom: 24px;">
-                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Login Blur</label>
-                            <input type="text" name="login_blur" value="{{ config.login_blur }}">
-                        </div>
-
-                        <div style="margin-bottom: 8px;">
-                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Login Tint</label>
-                            <input type="text" name="login_tint" value="{{ config.login_tint }}">
+                        <summary>Appearance & Branding</summary>
+                        <div style="display: flex; gap: 24px; margin-top: 16px;">
+                            <!-- Controls -->
+                            <div style="flex: 1;">
+                                <div style="margin-bottom: 16px;">
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 600;">Theme Selection</label>
+                                    <select name="theme" id="themeSelect">
+                                        <option value="light" {% if config.theme == 'light' %}selected{% endif %}>Light Theme (Cyan Accents)</option>
+                                        <option value="dark" {% if config.theme == 'dark' %}selected{% endif %}>Dark Theme (Green Accents)</option>
+                                        <option value="black" {% if config.theme == 'black' %}selected{% endif %}>Black Theme (Yellow Accents)</option>
+                                    </select>
+                                </div>
+                                <div style="margin-bottom: 16px;">
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 600;">Panel Name</label>
+                                    <input type="text" name="panel_name" id="panelNameInput" value="{{ config.panel_name }}">
+                                </div>
+                                <div style="margin-bottom: 16px;">
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 600;">Background Blur (<span id="blurVal">{{ config.get('bg_blur', 5) }}</span>px)</label>
+                                    <input type="range" name="bg_blur" id="bgBlurInput" min="0" max="100" value="{{ config.get('bg_blur', 5) }}" style="width: 100%;">
+                                </div>
+                                <div style="margin-bottom: 16px;">
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 600;">Background Tint (<span id="tintVal">{{ config.get('bg_tint', 50) }}</span>%)</label>
+                                    <input type="range" name="bg_tint" id="bgTintInput" min="0" max="100" value="{{ config.get('bg_tint', 50) }}" style="width: 100%;">
+                                </div>
+                                <div style="margin-bottom: 16px;">
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 600;">Custom Logo</label>
+                                    <input type="file" name="custom_logo">
+                                </div>
+                                <div style="margin-bottom: 16px;">
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 600;">Custom Favicon</label>
+                                    <input type="file" name="custom_favicon">
+                                </div>
+                                <div style="margin-bottom: 8px;">
+                                    <label style="display: block; margin-bottom: 8px; font-weight: 600;">Custom Background</label>
+                                    <input type="file" name="custom_bg">
+                                </div>
+                            </div>
+                            
+                            <!-- Live Preview -->
+                            <div style="flex: 1;">
+                                <label style="display: block; margin-bottom: 8px; font-weight: 600;">Live Preview</label>
+                                <div id="livePreviewBg" style="position: relative; width: 100%; aspect-ratio: 16/9; height: auto; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); background: url('{% if has_custom.bg %}/branding-assets/bg.jpg{% else %}{{ url_for('static', filename='bg.jpg') }}{% endif %}') no-repeat center center; background-size: cover; display: flex; align-items: center; justify-content: center;">
+                                    <div id="previewOverlay" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(5px);"></div>
+                                    <div id="previewCard" style="position: relative; z-index: 10; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px; padding: 20px; width: 250px; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
+                                        <h3 id="previewTitle" style="margin-top: 0; color: var(--text-main);">{{ config.panel_name }}</h3>
+                                        <div style="width: 100%; height: 30px; background: var(--bg-dark); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 10px;"></div>
+                                        <div style="width: 100%; height: 30px; background: var(--bg-dark); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 15px;"></div>
+                                        <button type="button" class="btn btn-primary" style="width: 100%;">Authenticate</button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </details>
 
-                    <details>
-                        <summary>Custom Branding</summary>
-                        <div style="margin-top: 16px; margin-bottom: 24px;">
-                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Panel Name (Server Name)</label>
-                            <input type="text" name="panel_name" value="{{ config.panel_name }}">
-                        </div>
+                    <script>
+                        document.addEventListener('DOMContentLoaded', () => {
+                            const detailsElements = document.querySelectorAll('details');
+                            const savedState = JSON.parse(localStorage.getItem('settingsDetailsState') || '[]');
+                            
+                            detailsElements.forEach((detail, index) => {
+                                if (savedState[index] !== undefined) {
+                                    if (savedState[index]) {
+                                        detail.setAttribute('open', '');
+                                    } else {
+                                        detail.removeAttribute('open');
+                                    }
+                                }
+                                detail.addEventListener('toggle', () => {
+                                    const currentState = Array.from(detailsElements).map(d => d.hasAttribute('open'));
+                                    localStorage.setItem('settingsDetailsState', JSON.stringify(currentState));
+                                });
+                            });
 
-                        <div style="margin-bottom: 24px;">
-                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Custom Logo</label>
-                            <input type="file" name="custom_logo">
-                        </div>
-                        <div style="margin-bottom: 24px;">
-                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Custom Favicon</label>
-                            <input type="file" name="custom_favicon">
-                        </div>
-                        <div style="margin-bottom: 8px;">
-                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Custom Background</label>
-                            <input type="file" name="custom_bg">
-                        </div>
-                    </details>
+                            const bgBlurInput = document.getElementById('bgBlurInput');
+                            const bgTintInput = document.getElementById('bgTintInput');
+                            const blurVal = document.getElementById('blurVal');
+                            const tintVal = document.getElementById('tintVal');
+                            const previewOverlay = document.getElementById('previewOverlay');
+                            const panelNameInput = document.getElementById('panelNameInput');
+                            const previewTitle = document.getElementById('previewTitle');
+                            const themeSelect = document.getElementById('themeSelect');
+
+                            function updatePreview() {
+                                const blur = bgBlurInput.value;
+                                const tint = bgTintInput.value;
+                                blurVal.innerText = blur;
+                                tintVal.innerText = tint;
+                                const alpha = (tint / 100).toFixed(2);
+                                previewOverlay.style.background = `rgba(0,0,0,${alpha})`;
+                                previewOverlay.style.backdropFilter = `blur(${blur}px)`;
+                                previewOverlay.style.webkitBackdropFilter = `blur(${blur}px)`;
+                                
+                                previewTitle.innerText = panelNameInput.value || 'Portal Node';
+                                document.body.className = 'theme-' + themeSelect.value;
+                            }
+
+                            bgBlurInput.addEventListener('input', updatePreview);
+                            bgTintInput.addEventListener('input', updatePreview);
+                            panelNameInput.addEventListener('input', updatePreview);
+                            themeSelect.addEventListener('change', updatePreview);
+                            
+                            updatePreview();
+                        });
+                    </script>
 
                     <button type="submit" class="btn btn-start" style="margin-top: 8px;">Save Settings</button>
                 </form>

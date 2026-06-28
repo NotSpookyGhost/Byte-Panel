@@ -20,8 +20,9 @@
             content: '';
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.75);
-            backdrop-filter: blur(8px);
+            background: rgba(0, 0, 0, {{ (config.get('bg_tint', 50) | float) / 100 }});
+            backdrop-filter: blur({{ config.get('bg_blur', 5) }}px);
+            -webkit-backdrop-filter: blur({{ config.get('bg_blur', 5) }}px);
             z-index: 1;
         }
 
@@ -44,7 +45,7 @@
         }
 
         h1 {
-            color: #fff;
+            color: var(--text-main);
             font-size: 3.5rem;
             font-weight: 900;
             text-transform: uppercase;
@@ -53,7 +54,7 @@
         }
 
         p {
-            color: #fff;
+            color: var(--text-main);
             font-size: 1.25rem;
             margin: 0 0 40px 0;
             font-weight: 300;
@@ -78,7 +79,7 @@
     </style>
 </head>
 
-<body>
+<body class="theme-{{ config.theme }}">
     <div class="content-wrapper">
         <img src="{{ url_for('static', filename='bytedev-white.png') }}" alt="ByteDev Logo" class="logo">
         <h1>Welcome to Byte Panel</h1>
