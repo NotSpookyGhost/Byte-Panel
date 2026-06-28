@@ -41,6 +41,9 @@ details[open] summary { margin-bottom: 16px; border-bottom: 1px solid var(--bord
 .btn-stop { background-color: #dc2626; color: white; }
 .btn-restart { background-color: #ca8a04; color: white; }
 .btn-primary { background-color: var(--accent); color: white; }
+.btn-outline { background-color: transparent; border: 1px solid var(--border); color: var(--text-main); }
+.btn-outline:hover { background-color: rgba(255,255,255,0.05); }
+.btn-outline.active { background-color: var(--accent); color: white; border-color: var(--accent); }
 .theme-emerald { --accent: var(--accent-emerald); }
 .theme-purple { --accent: var(--accent-purple); }
 .theme-oceanic { --accent: var(--accent-oceanic); }

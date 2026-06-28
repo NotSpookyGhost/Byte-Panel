@@ -50,10 +50,10 @@
             <h3 style="color: var(--text-main); margin-top: 0;"></h3>
 
             <div id="serverConsole" class="terminal"
-                style="width: 100%; height: 400px; overflow-y: auto; background-color: #000; color: #fff; font-family: monospace; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                style="width: 100%; height: 650px; overflow-y: auto; background-color: #000; color: #fff; font-family: monospace; padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
             </div>
             
-            <div style="display: flex; gap: 10px; margin-top: 15px;">
+            <div style="display: flex; gap: 10px; margin-top: 15px; max-width: 600px; margin-left: auto; margin-right: auto;">
                 <input type="text" id="commandInput" placeholder="Enter a server command (e.g. say Hello World)" 
                     style="flex-grow: 1; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-main);"
                     onkeydown="if(event.key === 'Enter') sendCommand()">
@@ -62,6 +62,9 @@
         </div>
 
         <script>
+            const configTz = "{{ config.get('timezone', 'UTC') }}";
+            const configTimeFormat = "{{ config.get('time_format', '12') }}";
+
             function sendCommand() {
                 const input = document.getElementById('commandInput');
                 const commandText = input.value.trim();
@@ -141,6 +144,25 @@
                     if (i === lines.length - 1 && lines[i] === "") continue;
 
                     let safeLine = escapeHTML(lines[i]);
+
+                    // Format timestamp if it exists [HH:MM:SS]
+                    safeLine = safeLine.replace(/^\[(\d{2}:\d{2}:\d{2})\]/, (match, timeStr) => {
+                        const today = new Date().toISOString().split("T")[0];
+                        const date = new Date(`${today}T${timeStr}Z`);
+                        if (isNaN(date.getTime())) return match;
+                        
+                        const options = {
+                            timeZone: configTz,
+                            hour: '2-digit', minute: '2-digit', second: '2-digit',
+                            hour12: configTimeFormat === '12'
+                        };
+                        try {
+                            return '[' + new Intl.DateTimeFormat('en-US', options).format(date) + ']';
+                        } catch (e) {
+                            return match;
+                        }
+                    });
+
                     let textColor = "#fff"; // base color white
 
                     if (safeLine.includes("ERROR") || safeLine.includes("Exception") || safeLine.includes("FATAL") || safeLine.includes("FAILED") || safeLine.includes("Caused by")) {
@@ -201,6 +223,10 @@
             setInterval(updateStats, 2000);
             updateStats();
         </script>
+    <div style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
+        <div>{{ app_version }}</div>
+        <div>bytedev.app &copy; 2026</div>
+    </div>
 </body>
 
 </html>
