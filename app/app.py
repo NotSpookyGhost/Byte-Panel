@@ -177,6 +177,61 @@ def save_player_history(data):
     with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
 
+def sync_bans_from_server():
+    banned_uuids = set()
+    banned_ips = set()
+    
+    bp_path = os.path.join(SERVER_DIR, "banned-players.json")
+    if os.path.exists(bp_path):
+        try:
+            with open(bp_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for item in data:
+                    if "uuid" in item:
+                        banned_uuids.add(item["uuid"].lower())
+        except:
+            pass
+            
+    bi_path = os.path.join(SERVER_DIR, "banned-ips.json")
+    if os.path.exists(bi_path):
+        try:
+            with open(bi_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for item in data:
+                    if "ip" in item:
+                        banned_ips.add(item["ip"].lower())
+        except:
+            pass
+            
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    users = conn.execute('''
+        SELECT u.uuid,
+               (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip
+        FROM users u
+    ''').fetchall()
+    
+    updates = []
+    for row in users:
+        uuid = row[0]
+        last_ip = row[1]
+        
+        is_uuid_banned = (uuid.lower() in banned_uuids)
+        is_ip_banned = (last_ip.lower() in banned_ips) if last_ip else False
+        
+        if is_uuid_banned and is_ip_banned:
+            updates.append((1, 'both', uuid))
+        elif is_uuid_banned:
+            updates.append((1, 'uuid', uuid))
+        elif is_ip_banned:
+            updates.append((1, 'ip', uuid))
+        else:
+            updates.append((0, 'none', uuid))
+            
+    if updates:
+        conn.executemany("UPDATE users SET ban_status = ?, ban_type = ? WHERE uuid = ?", updates)
+        conn.commit()
+    conn.close()
+
 def get_java_version_path(mc_version):
     try:
         # Handle 26.x series (Java 25)
@@ -700,6 +755,8 @@ def clear_logs():
 
 @app.route('/api/players')
 def api_players():
+    if not request.args.get('skipSync'):
+        sync_bans_from_server()
     conn = sqlite3.connect(PLAYER_DB_FILE)
     conn.row_factory = sqlite3.Row
     users = conn.execute('''
@@ -713,6 +770,7 @@ def api_players():
 
 @app.route('/players')
 def players():
+    sync_bans_from_server()
     conn = sqlite3.connect(PLAYER_DB_FILE)
     conn.row_factory = sqlite3.Row
     users = conn.execute('''
@@ -768,9 +826,9 @@ def moderate_player(action):
         user = conn.execute("SELECT ban_type FROM users WHERE username = ?", (player_name,)).fetchone()
         stored_type = user[0] if user and user[0] else 'both'
         
-        if stored_type in ['username', 'both']:
+        if stored_type in ['username', 'uuid', 'both', 'none']:
             MINECRAFT_PROCESS.stdin.write(f"pardon {player_name}\n")
-        if stored_type in ['ip', 'both'] and ip:
+        if stored_type in ['ip', 'both', 'none'] and ip:
             MINECRAFT_PROCESS.stdin.write(f"pardon-ip {ip}\n")
             
         conn.execute("UPDATE users SET ban_status = 0, ban_type = NULL WHERE username = ?", (player_name,))

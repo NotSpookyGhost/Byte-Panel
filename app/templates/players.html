@@ -126,7 +126,6 @@
         <div class="main-content">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                 <div style="display: flex; align-items: center; gap: 20px;">
-                    <h3 style="margin-top: 0; margin-bottom: 0;">Master Player Roster</h3>
                     <div class="filter-group" style="display: flex; gap: 8px;">
                         <button class="btn btn-outline btn-sm active" onclick="setFilter('all', this)">All</button>
                         <button class="btn btn-outline btn-sm" onclick="setFilter('online', this)">Online</button>
@@ -375,7 +374,7 @@
                     showToast('Executed KICK on ' + activeKickUser, '#ca8a04');
                     closeKickModal();
                     if(document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
-                    fetchPlayers();
+                    fetchPlayers(true);
                 } else {
                     showToast("Error: " + data.message, "#dc2626");
                 }
@@ -409,7 +408,7 @@
                     showToast('Executed BAN on ' + activeBanUser, '#dc2626');
                     closeBanModal();
                     if(document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
-                    fetchPlayers();
+                    fetchPlayers(true);
                 } else {
                     showToast("Error: " + data.message, "#dc2626");
                 }
@@ -428,7 +427,7 @@
                 if (data.status === 'success') {
                     showToast(`Executed ${action.toUpperCase()} on ${username}`, action === 'ban' ? '#dc2626' : '#ca8a04');
                     if(document.getElementById('auditModal').style.display === 'flex') closeAuditModal();
-                    fetchPlayers();
+                    fetchPlayers(true);
                 } else {
                     showToast("Error: " + data.message, "#dc2626");
                 }
@@ -527,8 +526,9 @@
             document.getElementById('auditModal').style.display = 'none';
         }
 
-        function fetchPlayers() {
-            fetch('/api/players')
+        function fetchPlayers(skipSync = false) {
+            const url = '/api/players' + (skipSync ? '?skipSync=1' : '');
+            fetch(url)
             .then(r => r.json())
             .then(players => {
                 const tbody = document.getElementById("rosterTable").tBodies[0];
