@@ -69,6 +69,31 @@
             opacity: 0.5; cursor: not-allowed;
         }
     </style>
+    <script>
+        const configTz = "{{ config.get('timezone', 'UTC') }}";
+        const configTimeFormat = "{{ config.get('time_format', '12') }}";
+        
+        function formatTimestamp(ts) {
+            if (!ts) return "Unknown";
+            try {
+                let safeTs = String(ts).replace(" ", "T");
+                if (!safeTs.endsWith("Z")) safeTs += "Z";
+                
+                const date = new Date(safeTs);
+                if (isNaN(date.getTime())) return String(ts);
+
+                const options = {
+                    timeZone: configTz,
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    hour12: configTimeFormat === '12'
+                };
+                return new Intl.DateTimeFormat('en-US', options).format(date);
+            } catch (e) {
+                return String(ts);
+            }
+        }
+    </script>
 </head>
 <body class="theme-{{ config.theme_accent }}">
     <div class="sidebar">
@@ -141,7 +166,7 @@
                         <td><img src="https://minotar.net/helm/{{ p.username }}/36.png" alt="skin" style="border-radius: 6px; width: 36px; height: 36px; display: block; image-rendering: pixelated;"></td>
                         <td class="fw-bold">{{ p.username }}</td>
                         <td class="font-mono text-sm">{{ p.uuid }}</td>
-                        <td class="text-sm">{{ p.last_seen }}</td>
+                        <td class="text-sm"><script>document.write(formatTimestamp("{{ p.last_seen }}"));</script></td>
                         <td class="font-mono text-sm">{{ p.last_ip }}</td>
                         <td class="text-sm">🌍 {{ p.country }}</td>
                         <td class="actions-cell">
@@ -160,11 +185,11 @@
     </div>
     
     <!-- Kick Modal -->
-    <div id="kickModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1050; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
+    <div id="kickModal" onclick="if(event.target === this) closeKickModal()" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1050; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
         <div class="card" style="width: 400px; max-width: 90%; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
             <h3 style="margin-top: 0; color: var(--text-main);">Kick Player</h3>
             <p style="color: var(--text-muted); margin-bottom: 15px;">Reason for kicking <span id="kickTarget" class="fw-bold" style="color: var(--text-main);"></span>:</p>
-            <input type="text" id="kickReason" style="width: 100%; box-sizing: border-box; margin-bottom: 20px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;" placeholder="Optional reason...">
+            <input type="text" id="kickReason" style="width: 100%; box-sizing: border-box; margin-bottom: 20px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;" placeholder="Optional reason..." onkeydown="if(event.key === 'Enter') executeKick()">
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="btn btn-outline" onclick="closeKickModal()">Cancel</button>
                 <button class="btn btn-restart" onclick="executeKick()">Confirm Kick</button>
@@ -173,7 +198,7 @@
     </div>
     
     <!-- Ban Modal -->
-    <div id="banModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1050; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
+    <div id="banModal" onclick="if(event.target === this) closeBanModal()" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1050; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
         <div class="card" style="width: 400px; max-width: 90%; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
             <h3 style="margin-top: 0; color: var(--text-main);">Ban Player</h3>
             <p style="color: var(--text-muted); margin-bottom: 15px;">Ban settings for <span id="banTarget" class="fw-bold" style="color: var(--text-main);"></span>:</p>
@@ -184,7 +209,7 @@
                 <option value="ip">IP Address Only</option>
             </select>
             <label style="display: block; margin-bottom: 5px; font-size: 0.9rem; color: var(--text-muted);">Reason</label>
-            <input type="text" id="banReason" style="width: 100%; box-sizing: border-box; margin-bottom: 20px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;" placeholder="Optional reason...">
+            <input type="text" id="banReason" style="width: 100%; box-sizing: border-box; margin-bottom: 20px; padding: 10px; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border); border-radius: 6px;" placeholder="Optional reason..." onkeydown="if(event.key === 'Enter') executeBan()">
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="btn btn-outline" onclick="closeBanModal()">Cancel</button>
                 <button class="btn btn-stop" onclick="executeBan()">Confirm Ban</button>
@@ -193,7 +218,7 @@
     </div>
     
     <!-- Security Audit Modal -->
-    <div id="auditModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
+    <div id="auditModal" onclick="if(event.target === this) closeAuditModal()" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
         <div class="card" style="width: 800px; max-width: 90%; max-height: 90vh; display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid var(--border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 20px; margin-bottom: 20px;">
                 <div style="display: flex; align-items: center; gap: 15px;">
@@ -235,7 +260,7 @@
         </div>
     </div>
 
-    <div id="toast-container"></div>
+    <!-- toast-container dynamically injected -->
 
     <script>
         let currentModalUsername = "";
@@ -334,6 +359,7 @@
             document.getElementById('kickTarget').innerText = username;
             document.getElementById('kickReason').value = "";
             document.getElementById('kickModal').style.display = "flex";
+            setTimeout(() => document.getElementById('kickReason').focus(), 10);
         }
         function closeKickModal() {
             document.getElementById('kickModal').style.display = "none";
@@ -366,6 +392,7 @@
             document.getElementById('banReason').value = "";
             document.getElementById('banType').value = "both";
             document.getElementById('banModal').style.display = "flex";
+            setTimeout(() => document.getElementById('banReason').focus(), 10);
         }
         function closeBanModal() {
             document.getElementById('banModal').style.display = "none";
@@ -427,7 +454,7 @@
             paginatedItems.forEach(row => {
                 tbody.innerHTML += `
                     <tr style="border-bottom: 1px solid var(--border);">
-                        <td style="padding: 12px 16px; font-size: 0.9rem;">${row.timestamp}</td>
+                        <td style="padding: 12px 16px; font-size: 0.9rem;">${formatTimestamp(row.timestamp)}</td>
                         <td style="padding: 12px 16px; font-family: monospace; color: var(--text-muted);">${row.ip}</td>
                         <td style="padding: 12px 16px;">🌍 ${row.country}</td>
                     </tr>
@@ -526,7 +553,7 @@
                         <td><img src="https://minotar.net/helm/${p.username}/36.png" alt="skin" style="border-radius: 6px; width: 36px; height: 36px; display: block; image-rendering: pixelated;"></td>
                         <td class="fw-bold">${p.username}</td>
                         <td class="font-mono text-sm">${p.uuid}</td>
-                        <td class="text-sm">${p.last_seen}</td>
+                        <td class="text-sm">${formatTimestamp(p.last_seen)}</td>
                         <td class="font-mono text-sm">${p.last_ip || 'Unknown'}</td>
                         <td class="text-sm">🌍 ${p.country || 'Unknown'}</td>
                         <td class="actions-cell">${actionsHtml}</td>

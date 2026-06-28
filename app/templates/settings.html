@@ -59,6 +59,34 @@
                         </div>
 
                         <div style="margin-bottom: 8px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">System Timezone</label>
+                            <input type="text" name="timezone" id="tzInput" value="{{ config.get('timezone', '') }}" placeholder="e.g. America/New_York">
+                            <small style="color: var(--text-muted); display: block; margin-top: 4px;">
+                                Used for formatting time on the panel.
+                            </small>
+                            <script>
+                                document.addEventListener('DOMContentLoaded', () => {
+                                    const tzInput = document.getElementById('tzInput');
+                                    if (!tzInput.value) {
+                                        try {
+                                            tzInput.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+                                        } catch (e) {
+                                            tzInput.value = 'UTC';
+                                        }
+                                    }
+                                });
+                            </script>
+                        </div>
+
+                        <div style="margin-bottom: 8px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Time Format</label>
+                            <select name="time_format">
+                                <option value="12" {% if config.get('time_format', '12') == '12' %}selected{% endif %}>12 Hour (AM/PM)</option>
+                                <option value="24" {% if config.get('time_format', '12') == '24' %}selected{% endif %}>24 Hour</option>
+                            </select>
+                        </div>
+
+                        <div style="margin-bottom: 8px;">
                             <label style="display: block; margin-bottom: 8px; font-weight: 600;">UI Accent Theme Color</label>
                             <select name="theme_accent">
                                 <option value="emerald" {% if config.theme_accent == 'emerald' %}selected{% endif %}>Emerald Green</option>

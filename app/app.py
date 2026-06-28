@@ -144,7 +144,9 @@ DEFAULT_CONFIG = {
     "theme_accent": "emerald",
     "panel_name": "Portal Node",
     "login_blur": "5",
-    "login_tint": "rgba(11, 11, 12, 0.6)"
+    "login_tint": "rgba(11, 11, 12, 0.6)",
+    "timezone": "UTC",
+    "time_format": "12"
 }
 
 # --- Helper Functions ---
@@ -794,6 +796,8 @@ def settings():
         config['panel_name'] = request.form.get('panel_name', config.get('panel_name'))
         config['login_blur'] = request.form.get('login_blur', config.get('login_blur'))
         config['login_tint'] = request.form.get('login_tint', config.get('login_tint'))
+        config['timezone'] = request.form.get('timezone', config.get('timezone', 'UTC'))
+        config['time_format'] = request.form.get('time_format', config.get('time_format', '12'))
         
         if 'custom_logo' in request.files and request.files['custom_logo'].filename:
             request.files['custom_logo'].save(os.path.join(BRANDING_DIR, 'logo.png'))
