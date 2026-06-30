@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <title>Server Properties - {{ config.panel_name }}</title>
+    {% if has_custom.favicon %}
+    <link rel="icon" href="/branding-assets/favicon.ico">
+    {% else %}
+    <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
+    {% endif %}
+</head>
+<body class="theme-{{ config.theme }}">
+
+    <div class="sidebar">
+            <div class="nav-group">
+                <div class="sidebar-header">
+                    {% if has_custom.logo %}
+                    <img class="sidebar-logo" src="/branding-assets/logo.png" alt="Logo">
+                    {% else %}
+                    <img class="sidebar-logo" src="{{ url_for('static', filename='bytedev_logo.png') }}" alt="Default Logo">
+                    {% endif %}
+                    <h2>{{ config.panel_name }}</h2>
+                </div>
+
+                <a href="/overview" class="nav-link">Overview</a>
+                <a href="/console" class="nav-link">Console</a>
+                <a href="/logs" class="nav-link">Logs</a>
+                <a href="/players" class="nav-link">Players</a>
+                <a href="/properties" class="nav-link active">Properties</a>
+                <a href="/settings" class="nav-link">Settings</a>
+            </div>
+            
+            <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
+                <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
+                <form action="/logout" method="GET" style="margin: 0;">
+                    <button type="submit" class="btn" style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
+                </form>
+            </div>
+        </div>
+
+        <style>
+            .tab-btn:hover { color: var(--text-main) !important; }
+            .tab-btn.active { color: var(--text-main) !important; border-bottom-color: var(--accent) !important; }
+        </style>
+        <div class="main-content">
+            <div class="content-header">
+                <h1>Server Properties</h1>
+                <p style="color: var(--text-muted); margin-top: 4px;">Configure Minecraft server.properties variables. All changes require a server restart to apply.</p>
+            </div>
+
+            <div id="unsavedChangesBar" style="display: none; background-color: var(--bg-panel); border: 1px solid var(--accent); border-radius: 8px; padding: 12px 24px; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.2); margin-bottom: 24px; position: sticky; top: 0; z-index: 100;">
+                <div style="font-weight: 600; color: var(--text-main);">Unsaved Changes Detected</div>
+                <div style="display: flex; gap: 12px;">
+                    <button type="button" class="btn btn-outline" id="btnRevertChanges">Revert</button>
+                    <button type="button" class="btn btn-primary" id="btnApplyChanges">Apply Changes</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <form id="propertiesForm" onsubmit="event.preventDefault();">
+                    <!-- Search Bar -->
+                    <div style="margin-bottom: 24px;">
+                        <input type="text" id="propertySearch" placeholder="Search properties..." style="width: 100%; max-width: 400px; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background-color: var(--bg-main); color: var(--text-main);">
+                    </div>
+
+                    <!-- Tabs -->
+                    <div class="tabs" style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 1px;">
+                        {% for cat_name in categorized_props.keys() %}
+                        <button type="button" class="tab-btn {% if loop.index0 == 0 %}active{% endif %}" data-target="{{ cat_name | replace(' ', '_') }}" style="padding: 10px 16px; background: none; border: none; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; font-weight: 600;">
+                            {{ cat_name }}
+                        </button>
+                        {% endfor %}
+                    </div>
+
+                    <!-- Tab Content -->
+                    {% for cat_name, props in categorized_props.items() %}
+                    <div class="tab-content" id="tab_{{ cat_name | replace(' ', '_') }}" style="display: {% if loop.index0 == 0 %}block{% else %}none{% endif %};">
+                        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+                            {% for k, v in props.items() %}
+                            <div class="prop-item" data-key="{{ k | lower }}">
+                                <label style="display: block; margin-bottom: 8px; font-weight: 600;">
+                                    {{ k }}
+                                    {% if k in ['difficulty', 'gamemode', 'white-list'] %}
+                                    <span style="font-size: 0.7em; background: var(--accent); color: white; padding: 2px 6px; border-radius: 4px; margin-left: 8px; vertical-align: middle;">Live Update</span>
+                                    {% endif %}
+                                </label>
+                                {% set vl = v | lower %}
+                                {% if vl == 'true' or vl == 'false' %}
+                                <select name="{{ k }}">
+                                    <option value="true" {% if vl == 'true' %}selected{% endif %}>true</option>
+                                    <option value="false" {% if vl == 'false' %}selected{% endif %}>false</option>
+                                </select>
+                                {% elif k == 'difficulty' %}
+                                <select name="{{ k }}">
+                                    <option value="peaceful" {% if vl == 'peaceful' %}selected{% endif %}>peaceful</option>
+                                    <option value="easy" {% if vl == 'easy' %}selected{% endif %}>easy</option>
+                                    <option value="normal" {% if vl == 'normal' %}selected{% endif %}>normal</option>
+                                    <option value="hard" {% if vl == 'hard' %}selected{% endif %}>hard</option>
+                                </select>
+                                {% else %}
+                                <input type="text" name="{{ k }}" value="{{ v }}">
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </form>
+            </div>
+        </div>
+
+    <div id="unsavedModal" class="modal-overlay" style="display: none;">
+        <div class="modal-box">
+            <h3 class="modal-title">Unsaved Changes</h3>
+            <p class="modal-msg">You have unsaved changes. Do you want to apply them before leaving?</p>
+            <div class="modal-actions">
+                <button class="btn btn-outline" id="btnModalRevert">Discard</button>
+                <button class="btn btn-primary" id="btnModalApply">Apply Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Apply / Restart Prompt Modal -->
+    <div id="restartModal" class="modal-overlay" style="display: none;">
+        <div class="modal-box">
+            <h3 class="modal-title">Apply Changes</h3>
+            <p class="modal-msg">A server restart is required for these settings to take effect. What would you like to do?</p>
+            <div class="modal-actions" style="flex-direction: column;">
+                <div style="display: flex; gap: 12px; width: 100%; justify-content: flex-end;">
+                    <button class="btn btn-outline" id="btnRestartLater">Apply & Restart Later</button>
+                    <button class="btn btn-primary" id="btnRestartNow">Restart Now</button>
+                </div>
+                <button class="btn btn-outline" id="btnCancelChanges" style="margin-top: 12px; width: 100%; border-color: var(--danger); color: var(--danger);">Cancel Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Live Applied Modal -->
+    <div id="liveModal" class="modal-overlay" style="display: none;">
+        <div class="modal-box">
+            <h3 class="modal-title">Changes Applied</h3>
+            <p class="modal-msg">Your changes have been saved and applied to the live server automatically.</p>
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="document.getElementById('liveModal').style.display = 'none';">Awesome</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const form = document.getElementById('propertiesForm');
+            const initialValues = {};
+            let hasUnsavedChanges = false;
+            const unsavedBar = document.getElementById('unsavedChangesBar');
+            
+            // Tab Switching Logic
+            const tabBtns = document.querySelectorAll('.tab-btn');
+            const tabContents = document.querySelectorAll('.tab-content');
+            
+            tabBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    tabBtns.forEach(b => b.classList.remove('active'));
+                    tabContents.forEach(c => c.style.display = 'none');
+                    
+                    btn.classList.add('active');
+                    document.getElementById('tab_' + btn.dataset.target).style.display = 'block';
+                });
+            });
+
+            // Search Logic
+            const searchInput = document.getElementById('propertySearch');
+            const propItems = document.querySelectorAll('.prop-item');
+            searchInput.addEventListener('input', (e) => {
+                const query = e.target.value.toLowerCase();
+                
+                if (query.trim().length > 0) {
+                    tabContents.forEach(c => c.style.display = 'block');
+                    document.querySelector('.tabs').style.display = 'none';
+                } else {
+                    document.querySelector('.tabs').style.display = 'flex';
+                    tabContents.forEach(c => c.style.display = 'none');
+                    const activeBtn = document.querySelector('.tab-btn.active');
+                    if (activeBtn) {
+                        document.getElementById('tab_' + activeBtn.dataset.target).style.display = 'block';
+                    }
+                }
+
+                propItems.forEach(item => {
+                    if (item.dataset.key.includes(query)) {
+                        item.style.display = 'block';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            });
+            
+            Array.from(form.elements).forEach(el => {
+                if (el.name) {
+                    initialValues[el.name] = el.value;
+                }
+            });
+
+            function checkChanges() {
+                let changed = false;
+                Array.from(form.elements).forEach(el => {
+                    if (el.name && el.value !== initialValues[el.name]) {
+                        changed = true;
+                    }
+                });
+                hasUnsavedChanges = changed;
+                unsavedBar.style.display = changed ? 'flex' : 'none';
+            }
+
+            form.addEventListener('input', checkChanges);
+            form.addEventListener('change', checkChanges);
+
+            document.getElementById('btnRevertChanges').addEventListener('click', () => {
+                Array.from(form.elements).forEach(el => {
+                    if (el.name) {
+                        el.value = initialValues[el.name];
+                    }
+                });
+                checkChanges();
+            });
+
+            let pendingNavigationUrl = null;
+
+            async function saveChanges() {
+                const fd = new FormData(form);
+                const res = await fetch('/properties', { method: 'POST', body: fd }).then(r => r.json());
+                
+                // Update initial values so it's no longer 'unsaved'
+                Array.from(form.elements).forEach(el => {
+                    if (el.name) {
+                        initialValues[el.name] = el.value;
+                    }
+                });
+                checkChanges();
+                return res;
+            }
+
+            function getChangeStatus() {
+                let hasLive = false;
+                let hasRestart = false;
+                const liveKeys = ['difficulty', 'gamemode', 'white-list'];
+                Array.from(form.elements).forEach(el => {
+                    if (el.name && el.value !== initialValues[el.name]) {
+                        if (liveKeys.includes(el.name)) {
+                            hasLive = true;
+                        } else {
+                            hasRestart = true;
+                        }
+                    }
+                });
+                return { hasLive, hasRestart };
+            }
+
+            document.getElementById('btnApplyChanges').addEventListener('click', async () => {
+                const status = getChangeStatus();
+                if (status.hasRestart) {
+                    if (status.hasLive) {
+                        document.querySelector('#restartModal .modal-msg').innerText = "Some of your changes require a server restart. What would you like to do?";
+                    } else {
+                        document.querySelector('#restartModal .modal-msg').innerText = "A server restart is required for these settings to take effect. What would you like to do?";
+                    }
+                    document.getElementById('restartModal').style.display = 'flex';
+                } else if (status.hasLive) {
+                    await saveChanges();
+                    document.getElementById('liveModal').style.display = 'flex';
+                }
+            });
+
+            document.getElementById('btnRestartLater').addEventListener('click', async () => {
+                await saveChanges();
+                document.getElementById('restartModal').style.display = 'none';
+                if (pendingNavigationUrl) {
+                    window.location.href = pendingNavigationUrl;
+                }
+            });
+
+            document.getElementById('btnCancelChanges').addEventListener('click', () => {
+                document.getElementById('restartModal').style.display = 'none';
+                document.getElementById('btnRevertChanges').click();
+                pendingNavigationUrl = null;
+            });
+
+            document.getElementById('btnRestartNow').addEventListener('click', async (e) => {
+                await saveChanges();
+                const btn = e.target;
+                const modalBox = btn.closest('.modal-box');
+                modalBox.innerHTML = `
+                    <h3 class="modal-title">Restarting Server</h3>
+                    <p class="modal-msg">The server is restarting to apply changes. Please wait...</p>
+                `;
+                await fetch('/api/server/restart', { method: 'POST' });
+                window.location.href = '/console'; // redirect to console to see it reboot
+            });
+
+            // Navigation Intercept Logic
+            let targetUrl = '';
+            document.querySelectorAll('.sidebar a').forEach(link => {
+                link.addEventListener('click', (e) => {
+                    if (hasUnsavedChanges) {
+                        e.preventDefault();
+                        targetUrl = link.href;
+                        document.getElementById('unsavedModal').style.display = 'flex';
+                    }
+                });
+            });
+
+            document.getElementById('btnModalRevert').addEventListener('click', () => {
+                window.location.href = targetUrl;
+            });
+
+            document.getElementById('btnModalApply').addEventListener('click', async () => {
+                document.getElementById('unsavedModal').style.display = 'none';
+                pendingNavigationUrl = targetUrl;
+                
+                const status = getChangeStatus();
+                if (status.hasRestart) {
+                    if (status.hasLive) {
+                        document.querySelector('#restartModal .modal-msg').innerText = "Some of your changes require a server restart. What would you like to do?";
+                    } else {
+                        document.querySelector('#restartModal .modal-msg').innerText = "A server restart is required for these settings to take effect. What would you like to do?";
+                    }
+                    document.getElementById('restartModal').style.display = 'flex';
+                } else if (status.hasLive) {
+                    await saveChanges();
+                    if (pendingNavigationUrl) {
+                        window.location.href = pendingNavigationUrl;
+                    }
+                }
+            });
+
+            // Poll for server status to refresh if started externally
+            let lastServerStatus = null;
+            async function checkServerStatus() {
+                try {
+                    const res = await fetch('/api/stats').then(r => r.json());
+                    if (lastServerStatus === null) {
+                        lastServerStatus = res.status;
+                    } else if (lastServerStatus !== 'Online' && res.status === 'Online') {
+                        if (!hasUnsavedChanges) {
+                            window.location.reload();
+                        }
+                    }
+                    lastServerStatus = res.status;
+                } catch (e) {}
+            }
+            setInterval(checkServerStatus, 5000);
+        });
+    </script>
+
+    <div style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
+        <div>{{ app_version }}</div>
+        <div>bytedev.app &copy; 2026</div>
+    </div>
+</body>
+</html>

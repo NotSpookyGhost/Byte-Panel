@@ -189,6 +189,69 @@ def save_player_history(data):
     with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
 
+def _log_to_console(msg):
+    config = load_config()
+    if not config.get('debug_mode', False):
+        return
+    try:
+        with open(os.path.join(SERVER_DIR, "console.log"), "a", encoding='utf-8') as lf:
+            lf.write(f"\n[System Debug] {msg}\n")
+    except:
+        pass
+
+def read_properties(file_path):
+    props = {}
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    if '=' in line:
+                        k, v = line.split('=', 1)
+                        props[k] = v
+                        
+    # Apply overrides
+    override_path = os.path.join(SERVER_DIR, "properties_override.json")
+    if os.path.exists(override_path):
+        try:
+            with open(override_path, "r") as f:
+                overrides = json.load(f)
+            props.update(overrides)
+        except:
+            pass
+            
+    _log_to_console("Server properties read from file.")
+    return props
+
+def write_properties(file_path, new_props):
+    lines = []
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    
+    out_lines = []
+    written_keys = set()
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#') and '=' in stripped:
+            k, v = stripped.split('=', 1)
+            if k in new_props:
+                out_lines.append(f"{k}={new_props[k]}\n")
+                written_keys.add(k)
+            else:
+                out_lines.append(line)
+        else:
+            out_lines.append(line)
+            
+    for k, v in new_props.items():
+        if k not in written_keys:
+            out_lines.append(f"{k}={v}\n")
+            
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.writelines(out_lines)
+        
+    _log_to_console("Server properties written to file.")
+
 def sync_bans_from_server():
     banned_uuids = {}
     banned_ips = {}
@@ -407,6 +470,21 @@ def start_minecraft_server():
             
         log_file = open(log_path, "a", encoding='utf-8')
         
+        # Apply properties overrides
+        override_path = os.path.join(SERVER_DIR, "properties_override.json")
+        if os.path.exists(override_path):
+            try:
+                with open(override_path, "r") as f:
+                    overrides = json.load(f)
+                write_properties(os.path.join(SERVER_DIR, "server.properties"), overrides)
+                os.remove(override_path)
+            except Exception as e:
+                print(f"[WATCHDOG] Failed to apply property overrides: {e}")
+                
+        # Also, the user requested: "During all server start ups read the propterties file"
+        # Reading it here will trigger the log message
+        _ = read_properties(os.path.join(SERVER_DIR, "server.properties"))
+
         process = subprocess.Popen(
             cmd, 
             cwd=SERVER_DIR, 
@@ -499,6 +577,7 @@ def start_minecraft_server():
         # 4. Save the Process ID (PID) so the Stop button knows what to kill later
         config['server_pid'] = process.pid
         config['is_running'] = True
+        config['target_state'] = 'Online'
         save_config(config)
         
         print(f"[WATCHDOG] SERVER LAUNCH: '{version}' started successfully on PID {process.pid}.", flush=True)
@@ -905,6 +984,91 @@ def get_custom_assets_state():
         "bg": os.path.exists(os.path.join(BRANDING_DIR, 'bg.jpg'))
     }
 
+@app.route('/properties', methods=['GET', 'POST'])
+def properties():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+        
+    props_path = os.path.join(SERVER_DIR, "server.properties")
+    
+    if request.method == 'POST':
+        old_props = read_properties(props_path)
+        new_props = {}
+        for key in request.form:
+            new_props[key] = request.form[key]
+            
+        changed = {}
+        for k, v in new_props.items():
+            if old_props.get(k) != v:
+                changed[k] = v
+                
+        if changed:
+            override_path = os.path.join(SERVER_DIR, "properties_override.json")
+            if os.path.exists(override_path):
+                try:
+                    with open(override_path, "r") as f:
+                        pending = json.load(f)
+                except:
+                    pending = {}
+            else:
+                pending = {}
+                
+            pending.update(changed)
+            with open(override_path, "w") as f:
+                json.dump(pending, f)
+                
+            global MINECRAFT_PROCESS
+            if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
+                for k, v in changed.items():
+                    if k == 'difficulty':
+                        MINECRAFT_PROCESS.stdin.write(f"difficulty {v}\n")
+                    elif k == 'gamemode':
+                        MINECRAFT_PROCESS.stdin.write(f"defaultgamemode {v}\n")
+                    elif k == 'white-list':
+                        cmd = "whitelist on" if str(v).lower() in ('true', 'yes', '1') else "whitelist off"
+                        MINECRAFT_PROCESS.stdin.write(f"{cmd}\n")
+                try:
+                    MINECRAFT_PROCESS.stdin.flush()
+                except: pass
+                
+            return jsonify({"status": "success", "message": "Properties updated. A server restart is required to apply all changes.", "requires_restart": True})
+        return jsonify({"status": "success", "message": "No changes made."})
+        
+    props = read_properties(props_path)
+    
+    categories_def = {
+        "Server Settings": ['server-port', 'server-ip', 'max-players', 'motd', 'online-mode', 'enable-rcon', 'rcon.password', 'rcon.port', 'enable-query', 'query.port', 'network-compression-threshold', 'max-tick-time', 'rate-limit', 'enable-status'],
+        "World Settings": ['level-name', 'level-seed', 'level-type', 'generator-settings', 'allow-nether', 'generate-structures', 'max-world-size', 'spawn-protection', 'sync-chunk-writes'],
+        "Gameplay Settings": ['gamemode', 'force-gamemode', 'difficulty', 'pvp', 'hardcore', 'enable-command-block', 'op-permission-level', 'function-permission-level', 'broadcast-console-to-ops', 'broadcast-rcon-to-ops', 'spawn-monsters', 'spawn-animals', 'spawn-npcs', 'allow-flight', 'enforce-whitelist', 'white-list', 'player-idle-timeout', 'entity-broadcast-range-percentage'],
+        "Resource Settings": ['resource-pack', 'resource-pack-sha1', 'require-resource-pack', 'resource-pack-prompt']
+    }
+    
+    categorized_props = {
+        "Server Settings": {},
+        "World Settings": {},
+        "Gameplay Settings": {},
+        "Resource Settings": {},
+        "Advanced": {}
+    }
+    
+    for k, v in props.items():
+        placed = False
+        for cat_name, cat_keys in categories_def.items():
+            if k in cat_keys:
+                categorized_props[cat_name][k] = v
+                placed = True
+                break
+        if not placed:
+            categorized_props["Advanced"][k] = v
+            
+    # Remove empty categories
+    categorized_props = {k: v for k, v in categorized_props.items() if v}
+            
+    return render_template('properties.html', 
+                           categorized_props=categorized_props, 
+                           config=load_config(), 
+                           has_custom=get_custom_assets_state())
+
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
     config = load_config()
@@ -916,6 +1080,7 @@ def settings():
         config['bg_tint'] = request.form.get('bg_tint', config.get('bg_tint', 50))
         config['timezone'] = request.form.get('timezone', config.get('timezone', 'UTC'))
         config['time_format'] = request.form.get('time_format', config.get('time_format', '12'))
+        config['debug_mode'] = request.form.get('debug_mode') == 'true'
         
         if 'custom_logo' in request.files and request.files['custom_logo'].filename:
             request.files['custom_logo'].save(os.path.join(BRANDING_DIR, 'logo.png'))
@@ -956,7 +1121,11 @@ def server_action(action):
             f.write("[Action] Server restarting.\n")
             f.flush()
         stop_minecraft_server()
-        time.sleep(5) 
+        if MINECRAFT_PROCESS:
+            try:
+                MINECRAFT_PROCESS.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                MINECRAFT_PROCESS.kill()
         start_minecraft_server()
         return jsonify({"status": "restarted"})
 
