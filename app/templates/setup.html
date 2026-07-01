@@ -173,17 +173,36 @@
         <div id="stage-2" class="stage">
             <h3 class="stage-title">Deployment Strategy</h3>
             <button class="stage-btn stage-btn-primary" onclick="goToStage3New()">Create New Server</button>
-            <label class="stage-btn" style="text-align: center; display: block;">
-                Import Existing Server ZIP
+            <button class="stage-btn" onclick="goToStage2b()">Import Existing Server</button>
+            <button type="button" class="stage-btn" onclick="goToStage1()">Back</button>
+        </div>
+
+        <!-- Stage 2b -->
+        <div id="stage-2b" class="stage">
+            <h3 class="stage-title">Import Strategy</h3>
+            <label class="stage-btn stage-btn-primary" style="text-align: center; display: block; cursor: pointer;">
+                Upload ZIP File
                 <input type="file" id="import-zip-input" accept=".zip" style="display: none;" onchange="executeImport(this.files[0])">
             </label>
-            <button type="button" class="stage-btn" onclick="goToStage1()">Back</button>
+            <button class="stage-btn" onclick="loadBackupsList()">Select from Existing Backups</button>
+            <button type="button" class="stage-btn" onclick="goToStage2()">Back</button>
+        </div>
+
+        <!-- Stage 2c -->
+        <div id="stage-2c" class="stage">
+            <h3 class="stage-title">Select Backup to Import</h3>
+            <div id="backups-list-container" style="max-height: 300px; overflow-y: auto; margin-bottom: 20px;"></div>
+            <button type="button" class="stage-btn" onclick="goToStage2b()">Back</button>
         </div>
 
         <!-- Stage 3 -->
         <div id="stage-3" class="stage">
             <h3 class="stage-title">Engine Configuration</h3>
             <form id="setup-form" onsubmit="event.preventDefault(); executeNewServer();">
+                <div class="form-group">
+                    <label for="serverName"><span class="label-title">Server Name</span></label>
+                    <input type="text" id="serverName" name="server_name" required placeholder="e.g. My Survival Server">
+                </div>
                 <div class="form-group">
                     <label for="versionSelect"><span class="label-title">Target Minecraft Version</span></label>
                     <select id="versionSelect" name="version" required></select>
@@ -211,7 +230,7 @@
             <h3 class="stage-title" id="progress-title">Initializing Engine...</h3>
             <p id="progress-msg" style="color: var(--text-muted); margin-bottom: 24px; text-align: center; font-size: 14px;">Please wait while the environment is being provisioned.</p>
             <div style="width: 100%; height: 8px; background-color: #27272a; border-radius: 4px; overflow: hidden; margin-top: 16px;">
-                <div id="progress-fill" style="height: 100%; width: 0%; background-color: var(--accent-emerald); transition: width 0.1s linear;"></div>
+                <div id="progress-fill" style="height: 100%; width: 0%; background-color: var(--accent); transition: width 0.1s linear;"></div>
             </div>
             <p id="progress-percent" style="text-align: right; margin-top: 8px; color: var(--text-muted); font-size: 12px;">0%</p>
         </div>
@@ -297,6 +316,36 @@
         
         function goToStage2() { hideAll(); document.getElementById('stage-2').classList.add('active'); setupMode = null; pendingZipFile = null; }
         
+        function goToStage2b() { hideAll(); document.getElementById('stage-2b').classList.add('active'); }
+        
+        function loadBackupsList() {
+            hideAll(); document.getElementById('stage-2c').classList.add('active');
+            const container = document.getElementById('backups-list-container');
+            container.innerHTML = '<p style="color: var(--text-muted); text-align: center;">Loading backups...</p>';
+            fetch('/api/backups/list').then(r => r.json()).then(data => {
+                if(!data.backups || Object.keys(data.backups).length === 0) {
+                    container.innerHTML = '<p style="color: var(--text-muted); text-align: center;">No backups found.</p>';
+                    return;
+                }
+                let html = '';
+                for(let serverName in data.backups) {
+                    html += `<h4 style="margin-bottom: 8px; color: var(--accent);">${serverName}</h4>`;
+                    data.backups[serverName].forEach(b => {
+                        html += `
+                        <div style="background: var(--bg-tertiary); padding: 10px; border-radius: 6px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <strong>${b.filename}</strong><br>
+                                <small style="color: var(--text-muted);">${b.date}</small>
+                            </div>
+                            <button class="stage-btn stage-btn-primary" style="margin:0; padding: 6px 12px; font-size: 12px;" onclick="executeImportBackup('${serverName}', '${b.filename}')">Import</button>
+                        </div>
+                        `;
+                    });
+                }
+                container.innerHTML = html;
+            });
+        }
+        
         function goToStage3New() { hideAll(); document.getElementById('stage-3').classList.add('active'); setupMode = 'new'; }
         
         function executeNewServer() {
@@ -311,21 +360,25 @@
             executeFinalStage();
         }
         
+        function executeImportBackup(serverName, filename) {
+            setupMode = 'import_backup';
+            pendingZipFile = serverName + "/" + filename; // Hacky pass through
+            executeFinalStage();
+        }
+        
         function executeFinalStage() {
             hideAll(); document.getElementById('stage-4').classList.add('active');
             
             if (setupMode === 'new') {
                 document.getElementById('progress-title').innerText = "Building Server";
-                document.getElementById('progress-msg').innerText = "Downloading core dependencies and booting engine...";
+                document.getElementById('progress-msg').innerText = "Downloading Minecraft Server Files";
                 
                 let p = 0;
-                let int = setInterval(() => {
-                    p += (95 - p) * 0.05;
-                    document.getElementById('progress-fill').style.width = p + '%';
-                    document.getElementById('progress-percent').innerText = Math.round(p) + '%';
-                }, 500);
+                document.getElementById('progress-fill').style.transition = 'width 0.5s linear';
+                document.getElementById('progress-fill').style.width = '0%';
                 
                 let formData = new FormData();
+                formData.append('server_name', document.getElementById('serverName').value);
                 formData.append('version', document.getElementById('versionSelect').value);
                 formData.append('server_type', document.getElementById('engineSelect').value);
                 formData.append('ram_allocation', document.getElementById('ramSlider').value);
@@ -333,18 +386,34 @@
                 formData.append('admin_password', admin_p);
                 
                 fetch('/setup', { method: 'POST', body: formData }).then(res => {
-                    clearInterval(int);
-                    document.getElementById('progress-fill').style.width = '100%';
-                    document.getElementById('progress-percent').innerText = '100%';
-                    location.href = "/overview";
+                    // Start polling
                 });
                 
-            } else if (setupMode === 'import') {
+                // Poll progress
+                let pollInterval = setInterval(() => {
+                    fetch('/api/setup/progress').then(r => r.json()).then(data => {
+                        if (data.msg) {
+                            document.getElementById('progress-msg').innerText = data.msg;
+                            document.getElementById('progress-fill').style.width = data.percent + '%';
+                            document.getElementById('progress-percent').innerText = Math.round(data.percent) + '%';
+                        }
+                        if (data.percent >= 100) {
+                            clearInterval(pollInterval);
+                            location.href = "/overview";
+                        }
+                    });
+                }, 1000);
+                
+            } else if (setupMode === 'import' || setupMode === 'import_backup') {
                 document.getElementById('progress-title').innerText = "Importing Server";
                 document.getElementById('progress-msg').innerText = "Transmitting ZIP to the ecosystem...";
                 
                 let formData = new FormData();
-                formData.append('import_zip', pendingZipFile);
+                if (setupMode === 'import') {
+                    formData.append('import_zip', pendingZipFile);
+                } else {
+                    formData.append('import_backup_path', pendingZipFile);
+                }
                 formData.append('admin_user', admin_u);
                 formData.append('admin_pass', admin_p);
                 
@@ -442,7 +511,7 @@
         engineSelect.value = "Vanilla";
     </script>
     <div style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
-        <div>{{ app_version }}</div>
+        <div>Byte Panel {{ app_version }}</div>
         <div>bytedev.app &copy; 2026</div>
     </div>
 </body>

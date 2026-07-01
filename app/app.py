@@ -664,12 +664,12 @@ def stop_server():
 @app.before_request
 def check_auth_and_setup():
     config = load_config()
-    public_routes = ['login', 'static', 'serve_custom_branding']
+    public_routes = ['login', 'static', 'serve_custom_branding', 'api_list_backups']
     
     if not config.get('is_setup'):
-        public_routes.extend(['setup', 'import_server', 'welcome'])
+        public_routes.extend(['setup', 'import_server', 'welcome', 'api_setup_progress', 'import_zip'])
 
-    if request.endpoint and request.endpoint not in public_routes:
+    if request.endpoint and request.endpoint not in public_routes and not request.path.startswith('/api/import'):
         if not session.get('logged_in'):
             return redirect(url_for('login'))
             
@@ -678,6 +678,151 @@ def check_auth_and_setup():
                 return redirect(url_for('welcome'))
             elif config.get('welcome_seen') and request.endpoint not in ['setup', 'import_server', 'welcome']:
                 return redirect(url_for('setup'))
+
+@app.route('/api/backup/download/<server_name>/<filename>')
+def api_download_backup(server_name, filename):
+    safe_name = os.path.basename(server_name)
+    safe_file = os.path.basename(filename)
+    path = os.path.join(DATA_DIR, "backups", safe_name, safe_file)
+    if os.path.exists(path):
+        return send_file(path, as_attachment=True, download_name=safe_file)
+    return "Not Found", 404
+
+@app.route('/api/backup/delete', methods=['POST'])
+def api_delete_backup():
+    payload = request.get_json() or {}
+    server_name = payload.get('server_name')
+    filename = payload.get('filename')
+    
+    if server_name and filename:
+        safe_name = os.path.basename(server_name)
+        safe_file = os.path.basename(filename)
+        path = os.path.join(DATA_DIR, "backups", safe_name, safe_file)
+        if os.path.exists(path):
+            os.remove(path)
+            return jsonify({"status": "success"})
+    return jsonify({"error": "Failed to delete"}), 400
+
+@app.route('/api/backup/restore', methods=['POST'])
+def api_restore_backup():
+    import zipfile
+    import time
+    
+    payload = request.get_json() or {}
+    server_name = payload.get('server_name')
+    filename = payload.get('filename')
+    
+    if not server_name or not filename:
+        return jsonify({"error": "Missing params"}), 400
+        
+    safe_name = os.path.basename(server_name)
+    safe_file = os.path.basename(filename)
+    path = os.path.join(DATA_DIR, "backups", safe_name, safe_file)
+    
+    if not os.path.exists(path):
+        return jsonify({"error": "File not found"}), 404
+        
+    global MINECRAFT_PROCESS
+    if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
+        stop_minecraft_server()
+        time.sleep(2)
+        config = load_config()
+        if config.get('server_pid'):
+            try: os.kill(config.get('server_pid'), 9)
+            except: pass
+        
+    # Wipe current server directory
+    for f in os.listdir(SERVER_DIR):
+        f_path = os.path.join(SERVER_DIR, f)
+        try:
+            if os.path.isdir(f_path): shutil.rmtree(f_path)
+            else: os.unlink(f_path)
+        except: pass
+        
+    with zipfile.ZipFile(path, 'r') as zip_ref:
+        zip_ref.extractall(SERVER_DIR)
+        
+    # Extract player_history.json if present
+    imported_history = os.path.join(SERVER_DIR, "player_history.json")
+    if os.path.exists(imported_history):
+        history_file = os.path.join(DATA_DIR, "player_history.json")
+        shutil.move(imported_history, history_file)
+        
+    return jsonify({"status": "restored"})
+
+@app.route('/api/backups/list')
+def api_list_backups():
+    backups_dir = os.path.join(DATA_DIR, "backups")
+    res = {}
+    if os.path.exists(backups_dir):
+        for srv in os.listdir(backups_dir):
+            srv_path = os.path.join(backups_dir, srv)
+            if os.path.isdir(srv_path):
+                files = []
+                for f in os.listdir(srv_path):
+                    if f.endswith(".zip"):
+                        # Parse date from name: server_name_YYYYMMDDHHMMSS_manual.zip
+                        stat = os.stat(os.path.join(srv_path, f))
+                        date_str = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        btype = "manual"
+                        if "_auto.zip" in f: btype = "auto"
+                        
+                        files.append({
+                            "filename": f,
+                            "date": date_str,
+                            "type": btype,
+                            "timestamp": stat.st_mtime,
+                            "size": stat.st_size
+                        })
+                files.sort(key=lambda x: x['timestamp'], reverse=True)
+                if files:
+                    res[srv] = files
+    return jsonify({"backups": res})
+
+@app.route('/api/backup/rename', methods=['POST'])
+def rename_backup():
+    if not session.get('logged_in'): return jsonify({"status": "error", "message": "Unauthorized"}), 403
+    
+    server_name = request.form.get('server_name')
+    old_name = request.form.get('old_name')
+    new_name = request.form.get('new_name')
+    
+    if not server_name or not old_name or not new_name:
+        return jsonify({"status": "error", "message": "Missing parameters"})
+        
+    if not new_name.endswith(".zip"):
+        new_name += ".zip"
+        
+    if "_auto.zip" in old_name:
+        return jsonify({"status": "error", "message": "Cannot rename automatic backups"})
+        
+    if "/" in new_name or "\\" in new_name or ".." in new_name:
+        return jsonify({"status": "error", "message": "Invalid backup name"})
+        
+    backups_dir = os.path.join(DATA_DIR, "backups")
+    srv_path = os.path.join(backups_dir, server_name)
+    old_path = os.path.join(srv_path, old_name)
+    new_path = os.path.join(srv_path, new_name)
+    
+    if not os.path.exists(old_path):
+        return jsonify({"status": "error", "message": "Backup not found"})
+        
+    if os.path.exists(new_path):
+        return jsonify({"status": "error", "message": "A backup with that name already exists"})
+        
+    try:
+        os.rename(old_path, new_path)
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route('/backups')
+def backups_page():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    return render_template('backups.html', config=load_config(), has_custom=get_custom_assets_state())
 
 @app.route('/branding-assets/<filename>')
 def serve_custom_branding(filename):
@@ -729,8 +874,11 @@ def welcome():
         
     return render_template('welcome.html')
 
+SETUP_PROGRESS = {"percent": 0, "msg": "Ready"}
+
 @app.route('/setup', methods=['GET', 'POST'])
 def setup():
+    global SETUP_PROGRESS
     config = load_config()
     max_ram = get_system_ram_gb() # Fetch the max RAM
     if request.method == 'POST':
@@ -751,13 +899,15 @@ def setup():
             # You can flash an error here or redirect back to setup
             return redirect(url_for('setup'))
         
-        #Save to Config
+        server_name = request.form.get('server_name', 'My Server')
+
+        # Save to Config
+        config['server_name'] = server_name
         config['server_type'] = server_type
         config['mc_version'] = version
         config['ram_gb'] = int(ram_allocation)
         config['admin_user'] = admin_user
         config['admin_pass'] = admin_pass
-        config['is_setup'] = True
         
         save_config(config)
         
@@ -765,10 +915,27 @@ def setup():
         engine_info_path = os.path.join(SERVER_DIR, "ServerEngineInfo")
         with open(engine_info_path, "w") as f:
             json.dump({
+                "server_name": server_name,
                 "mc_version": version,
                 "server_type": server_type,
                 "ram_gb": int(ram_allocation)
             }, f)
+
+        # Launch background setup process
+        import threading
+        SETUP_PROGRESS["percent"] = 5
+        SETUP_PROGRESS["msg"] = "Downloading Minecraft Server Files"
+        t = threading.Thread(target=setup_server_bg, args=(server_type, version, config))
+        t.daemon = True
+        t.start()
+        
+        return jsonify({"status": "started"})
+        
+    return render_template('setup.html', config=config, max_ram=max_ram, has_custom=get_custom_assets_state())
+
+def setup_server_bg(server_type, version, config):
+    global SETUP_PROGRESS
+    try:
 
         # 1. Download Resolution Logic
         jar_url = ""
@@ -812,27 +979,69 @@ def setup():
 
         # 3. Forge Installation Subprocess
         if installer_mode and server_type == "Forge":
+            SETUP_PROGRESS["percent"] = 30
+            SETUP_PROGRESS["msg"] = "Applying Correct Java Environment (Forge Installer)"
             java_bin = get_java_version_path(version)
-            # Run the Forge installer headlessly
             subprocess.run([java_bin, "-jar", target_filename, "--installServer"], cwd=SERVER_DIR)
-            # Clean up the installer
             os.remove(target_path)
-            # Forge uses custom run scripts now, but for legacy compatibility we rename the generated forge jar
             for file in os.listdir(SERVER_DIR):
                 if file.startswith("forge-") and file.endswith(".jar"):
                     os.rename(os.path.join(SERVER_DIR, file), os.path.join(SERVER_DIR, "server.jar"))
 
-        # 4. Finalize Configuration
-        config['mc_version'] = version
-        config['server_type'] = server_type
+        SETUP_PROGRESS["percent"] = 50
+        SETUP_PROGRESS["msg"] = "Applying Correct Java Environment"
+        
+        # 4. Finalize Configuration & First Boot
         config['java_path'] = "" 
+        save_config(config)
+        
+        SETUP_PROGRESS["percent"] = 60
+        SETUP_PROGRESS["msg"] = "Creating First Server Start"
+        
+        # EULA
+        with open(os.path.join(SERVER_DIR, "eula.txt"), "w") as f:
+            f.write("eula=true\n")
+            
+        java_bin = get_java_version_path(version)
+        cmd = [java_bin, "-Xmx1G", "-Xms1G", "-jar", "server.jar", "nogui"]
+        
+        process = subprocess.Popen(
+            cmd, cwd=SERVER_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, 
+            stderr=subprocess.STDOUT, universal_newlines=True
+        )
+        
+        for line in iter(process.stdout.readline, ''):
+            if "Done (" in line or "For help, type" in line:
+                break
+                
+        # Wait a few seconds for world save, then stop
+        import time
+        time.sleep(3)
+        try:
+            process.stdin.write("stop\n")
+            process.stdin.flush()
+            process.wait(timeout=30)
+        except:
+            process.kill()
+            
+        SETUP_PROGRESS["percent"] = 90
+        SETUP_PROGRESS["msg"] = "Creating Initial Backup/Restore Point"
+        
+        # Create initial backup
+        create_backup(config.get('server_name'), is_manual=True, is_initial=True)
+        
         config['is_setup'] = True
         save_config(config)
         
-        start_minecraft_server()
-        return redirect(url_for('overview'))
+        SETUP_PROGRESS["percent"] = 100
+        SETUP_PROGRESS["msg"] = "Done"
         
-    return render_template('setup.html', config=config, max_ram=max_ram, has_custom=get_custom_assets_state())
+    except Exception as e:
+        SETUP_PROGRESS["msg"] = f"Error: {e}"
+
+@app.route('/api/setup/progress')
+def api_setup_progress():
+    return jsonify(SETUP_PROGRESS)
 
 @app.route('/')
 @app.route('/overview')
@@ -1080,8 +1289,11 @@ def settings():
         config['bg_tint'] = request.form.get('bg_tint', config.get('bg_tint', 50))
         config['timezone'] = request.form.get('timezone', config.get('timezone', 'UTC'))
         config['time_format'] = request.form.get('time_format', config.get('time_format', '12'))
-        config['debug_mode'] = request.form.get('debug_mode') == 'true'
         
+        config['debug_mode'] = request.form.get('debug_mode') == 'true'
+        config['auto_backup_enabled'] = request.form.get('auto_backup_enabled') == 'true'
+        config['auto_backup_freq'] = request.form.get('auto_backup_freq', config.get('auto_backup_freq', 'weekly'))
+        config['auto_backup_keep'] = int(request.form.get('auto_backup_keep', config.get('auto_backup_keep', 5)))
         if 'custom_logo' in request.files and request.files['custom_logo'].filename:
             request.files['custom_logo'].save(os.path.join(BRANDING_DIR, 'logo.png'))
         if 'custom_favicon' in request.files and request.files['custom_favicon'].filename:
@@ -1129,22 +1341,110 @@ def server_action(action):
         start_minecraft_server()
         return jsonify({"status": "restarted"})
 
-@app.route('/api/backup', methods=['POST'])
-def backup_server():
-    # Inject config into the server dir temporarily
+def create_backup(server_name, is_manual, is_initial=False):
+    import time
+    from datetime import datetime
+    
+    server_backups_dir = os.path.join(DATA_DIR, "backups", server_name)
+    os.makedirs(server_backups_dir, exist_ok=True)
+    
+    # Inject config and player history into the server dir temporarily
     temp_config = os.path.join(SERVER_DIR, "panel_config.json")
     if os.path.exists(CONFIG_FILE):
         shutil.copy2(CONFIG_FILE, temp_config)
         
-    backup_path = os.path.join(DATA_DIR, "server_backup")
+    temp_history = os.path.join(SERVER_DIR, "player_history.json")
+    history_file = os.path.join(DATA_DIR, "player_history.json")
+    if os.path.exists(history_file):
+        shutil.copy2(history_file, temp_history)
+        
+    now = datetime.now()
+    date_str = now.strftime("%Y%m%d%H%M%S")
+    
+    if is_initial:
+        suffix = date_str + "_InitialBackup"
+    elif is_manual:
+        suffix = date_str + "_manual"
+    else:
+        suffix = date_str + "_auto"
+        
+    backup_filename = f"{server_name}_{suffix}"
+    backup_path = os.path.join(server_backups_dir, backup_filename)
+    
     shutil.make_archive(backup_path, 'zip', SERVER_DIR)
     
     if os.path.exists(temp_config):
         os.remove(temp_config)
+    if os.path.exists(temp_history):
+        os.remove(temp_history)
         
-    response = make_response(send_file(f"{backup_path}.zip", as_attachment=True, download_name=f"server_backup_{int(time.time())}.zip"))
-    response.set_cookie('backup_complete', '1', max_age=30, path='/')
-    return response
+    # Prune automated backups if needed
+    if not is_manual and not is_initial:
+        config = load_config()
+        max_backups = int(config.get('auto_backup_keep', 5))
+        
+        auto_backups = []
+        for f in os.listdir(server_backups_dir):
+            if f.endswith('_auto.zip'):
+                auto_backups.append(os.path.join(server_backups_dir, f))
+                
+        # Sort by modified time
+        auto_backups.sort(key=os.path.getmtime)
+        
+        while len(auto_backups) > max_backups:
+            oldest = auto_backups.pop(0)
+            try:
+                os.remove(oldest)
+            except:
+                pass
+                
+    return f"{backup_path}.zip"
+
+def backup_scheduler():
+    import time
+    from datetime import datetime, timedelta
+    
+    while True:
+        try:
+            config = load_config()
+            if config.get('auto_backup_enabled') and config.get('server_name'):
+                freq = config.get('auto_backup_freq', 'weekly')
+                last_run = config.get('last_auto_backup', 0)
+                now = time.time()
+                
+                should_run = False
+                if freq == 'hourly' and (now - last_run) >= 3600:
+                    should_run = True
+                elif freq == '6_hours' and (now - last_run) >= 21600:
+                    should_run = True
+                elif freq in ['12_hours', 'twice_daily'] and (now - last_run) >= 43200:
+                    should_run = True
+                elif freq == 'daily' and (now - last_run) >= 86400:
+                    should_run = True
+                elif freq == 'weekly' and (now - last_run) >= 604800:
+                    should_run = True
+                elif freq == 'monthly' and (now - last_run) >= 2592000:
+                    should_run = True
+                    
+                if should_run:
+                    create_backup(config.get('server_name'), is_manual=False)
+                    config['last_auto_backup'] = now
+                    save_config(config)
+        except Exception as e:
+            print(f"[BACKUP SCHEDULER ERROR] {e}")
+            
+        time.sleep(60)
+
+@app.route('/api/backup/create', methods=['POST'])
+def api_create_backup():
+    config = load_config()
+    server_name = config.get('server_name', 'UnknownServer')
+    
+    try:
+        zip_path = create_backup(server_name, is_manual=True)
+        return jsonify({"status": "success", "file": os.path.basename(zip_path)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/api/purge', methods=['POST'])
 def purge_server():
@@ -1191,18 +1491,25 @@ def purge_server():
 
 @app.route('/api/import', methods=['POST'])
 def import_server():
-    if 'import_zip' not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
-        
-    file = request.files['import_zip']
-    if file.filename == '':
-        return jsonify({"error": "No file selected"}), 400
-        
     global MINECRAFT_PROCESS
-    
-    # Pre-flight check: store zip temporarily and inspect for ServerEngineInfo
     temp_zip = os.path.join(DATA_DIR, "temp_import.zip")
-    file.save(temp_zip)
+    
+    if 'import_backup_path' in request.form:
+        backup_path = request.form['import_backup_path']
+        # backup_path is passed as 'serverName/filename.zip'
+        full_backup_path = os.path.join(DATA_DIR, "backups", backup_path)
+        if not os.path.exists(full_backup_path):
+            return jsonify({"error": "Backup file not found"}), 404
+        shutil.copy2(full_backup_path, temp_zip)
+    else:
+        if 'import_zip' not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
+            
+        file = request.files['import_zip']
+        if file.filename == '':
+            return jsonify({"error": "No file selected"}), 400
+            
+        file.save(temp_zip)
     
     needs_manual = False
     try:
@@ -1248,6 +1555,7 @@ def import_server():
                 if 'mc_version' in engine_data: config['mc_version'] = engine_data['mc_version']
                 if 'server_type' in engine_data: config['server_type'] = engine_data['server_type']
                 if 'ram_gb' in engine_data: config['ram_gb'] = engine_data['ram_gb']
+                if 'server_name' in engine_data: config['server_name'] = engine_data['server_name']
         except: pass
     else:
         # Fallback to manual payload
@@ -1267,6 +1575,17 @@ def import_server():
     legacy_config = os.path.join(SERVER_DIR, "panel_config.json")
     if os.path.exists(legacy_config):
         os.remove(legacy_config)
+        
+    # Extract player_history.json if present
+    imported_history = os.path.join(SERVER_DIR, "player_history.json")
+    if os.path.exists(imported_history):
+        history_file = os.path.join(DATA_DIR, "player_history.json")
+        shutil.move(imported_history, history_file)
+    else:
+        # If no history was imported, make sure we wipe the current history!
+        history_file = os.path.join(DATA_DIR, "player_history.json")
+        if os.path.exists(history_file):
+            os.remove(history_file)
         
     config['is_setup'] = True
     config['target_state'] = 'Offline'
@@ -1354,4 +1673,9 @@ def handle_api_command():
     return jsonify({"status": "error", "message": "Server offline"})
 
 if __name__ == '__main__':
+    # Start backup scheduler thread
+    import threading
+    scheduler_thread = threading.Thread(target=backup_scheduler, daemon=True)
+    scheduler_thread.start()
+    
     socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)

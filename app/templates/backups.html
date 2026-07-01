@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <title>Server Backups</title>
+    {% if has_custom.favicon %}
+    <link rel="icon" href="/branding-assets/favicon.ico">
+    {% else %}
+    <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
+    {% endif %}
+    <style>
+        .roster-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+
+        .roster-table th {
+            padding: 16px;
+            text-align: left;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        .roster-table td {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+        }
+
+        .roster-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .roster-row {
+            transition: all 0.2s;
+        }
+
+        .roster-row:hover {
+            background-color: rgba(255, 255, 255, 0.04);
+        }
+
+        .fw-bold {
+            font-weight: 600;
+            color: var(--text-main);
+            font-size: 1.05rem;
+        }
+        
+        .font-mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        .text-sm {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .no-backups {
+            color: var(--text-muted);
+            font-style: italic;
+            font-size: 14px;
+            padding: 8px 0;
+        }
+    </style>
+</head>
+<body class="theme-{{ config.theme }}">
+    <div class="sidebar">
+        <div class="nav-group">
+            <div class="sidebar-header">
+                {% if has_custom.logo %}
+                <img class="sidebar-logo" src="/branding-assets/logo.png" alt="Logo">
+                {% else %}
+                <img class="sidebar-logo" src="{{ url_for('static', filename='bytedev_logo.png') }}" alt="Default Logo">
+                {% endif %}
+                <h2>{{ config.panel_name }}</h2>
+            </div>
+            <a href="/overview">Overview</a>
+            <a href="/console">Console</a>
+            <a href="/logs">Logs</a>
+            <a href="/players">Players</a>
+            <a href="/properties">Properties</a>
+            <a href="/backups" class="active">Backups</a>
+            <a href="/settings">Settings</a>
+        </div>
+        <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
+            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
+            <form action="/logout" method="GET" style="margin: 0;">
+                <button type="submit" class="btn"
+                    style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
+            </form>
+        </div>
+    </div>
+    <div class="main-layout">
+        <div class="top-action-bar">
+            <div>Server Backups | <span style="color: var(--text-muted);">{{ config.get('server_name', 'My Server') }}</span> <span id="total-storage-label" style="font-size: 14px; color: var(--text-muted); margin-left: 12px; font-weight: normal;"></span></div>
+            <div style="display:flex; gap:10px;">
+                <button class="btn" style="background: var(--accent); color: white;" onclick="createManualBackup()">Create Manual Backup</button>
+            </div>
+        </div>
+        <div class="main-content">
+            <div id="backups-container">
+                <p style="color: var(--text-muted);">Loading backups...</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const currentServerName = "{{ config.get('server_name', 'My Server') }}";
+        
+        const configTz = "{{ config.get('timezone', 'UTC') }}";
+        const configTimeFormat = "{{ config.get('time_format', '12') }}";
+
+        function formatTimestamp(ts) {
+            if (!ts) return "Unknown";
+            try {
+                let safeTs = String(ts).replace(" ", "T");
+                if (!safeTs.endsWith("Z")) safeTs += "Z";
+                const date = new Date(safeTs);
+                if (isNaN(date.getTime())) return String(ts);
+                const options = {
+                    timeZone: configTz,
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    hour12: configTimeFormat === '12'
+                };
+                return new Intl.DateTimeFormat('en-US', options).format(date);
+            } catch (e) {
+                return String(ts);
+            }
+        }
+        
+        function formatBytesMbGb(bytes) {
+            if (!bytes || bytes === 0) return '0 MB';
+            const k = 1024;
+            let mb = bytes / (k * k);
+            if (mb >= 1024) {
+                return (mb / 1024).toFixed(2) + ' GB';
+            }
+            return mb.toFixed(2) + ' MB';
+        }
+
+        async function fetchBackups() {
+            try {
+                let res = await fetch('/api/backups/list');
+                let data = await res.json();
+                renderBackups(data.backups);
+            } catch(e) {
+                document.getElementById('backups-container').innerHTML = '<p style="color: #ef4444;">Failed to load backups.</p>';
+            }
+        }
+        
+        function renderBackups(backupsMap) {
+            const container = document.getElementById('backups-container');
+            if (!backupsMap || Object.keys(backupsMap).length === 0) {
+                container.innerHTML = '<p class="no-backups">No backups found.</p>';
+                document.getElementById('total-storage-label').innerText = '(Total Space Used: 0 MB)';
+                return;
+            }
+            
+            let totalBytes = 0;
+            for (let srv in backupsMap) {
+                backupsMap[srv].forEach(f => totalBytes += (f.size || 0));
+            }
+            document.getElementById('total-storage-label').innerText = `(Total Space Used: ${formatBytesMbGb(totalBytes)})`;
+
+            
+            let html = '';
+            
+            if (backupsMap[currentServerName]) {
+                html += renderServerSection(currentServerName, backupsMap[currentServerName], true);
+            }
+            
+            let othersHTML = '';
+            for (let srv in backupsMap) {
+                if (srv !== currentServerName) {
+                    othersHTML += renderServerSection(srv, backupsMap[srv], false);
+                }
+            }
+            
+            if (othersHTML) {
+                html += `<div style="margin-top: 48px; margin-bottom: 16px;"><h3 style="color: var(--text-muted); font-size: 18px; margin: 0;">Other Server Backups</h3></div>`;
+                html += othersHTML;
+            }
+            
+            container.innerHTML = html;
+        }
+        
+        function renderServerSection(serverName, files, isCurrent) {
+            let manualFiles = files.filter(f => f.type === 'manual');
+            let autoFiles = files.filter(f => f.type === 'auto');
+            
+            let serverBytes = 0;
+            files.forEach(f => serverBytes += (f.size || 0));
+            let sizeStr = formatBytesMbGb(serverBytes);
+            
+            let html = ``;
+            if (!isCurrent) {
+                html += `<details style="margin-bottom: 32px; background: var(--bg-card); border-radius: 8px; border: 1px solid var(--border); padding: 16px;">
+                    <summary style="font-size: 20px; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;">
+                        ${serverName}
+                        <span style="font-size: 14px; font-weight: 400; color: var(--text-muted); margin-left: auto;">${sizeStr}</span>
+                    </summary>
+                    <div style="margin-top: 24px;">`;
+            } else {
+                html += `<div style="margin-bottom: 32px;">
+                    <h3 style="font-size: 20px; font-weight: 600; margin: 0 0 12px 0; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
+                        ${serverName}
+                        <span style="font-size: 12px; background: var(--accent); color: white; padding: 2px 8px; border-radius: 12px; font-weight: 500;">Current Server</span>
+                        <span style="font-size: 14px; font-weight: 400; color: var(--text-muted); margin-left: auto;">${sizeStr}</span>
+                    </h3>`;
+            }
+            
+            html += `<div style="font-size: 16px; font-weight: 600; margin: 16px 0 8px 0; color: var(--text-muted);">Manual Backups</div>`;
+            if (manualFiles.length > 0) {
+                html += renderBackupTable(serverName, manualFiles, true);
+            } else {
+                html += `<div class="no-backups" style="margin-bottom: 24px;">No manual backups found.</div>`;
+            }
+            
+            html += `<div style="font-size: 16px; font-weight: 600; margin: 16px 0 8px 0; color: var(--text-muted);">Automatic Backups</div>`;
+            if (autoFiles.length > 0) {
+                html += renderBackupTable(serverName, autoFiles, false);
+            } else {
+                html += `<div class="no-backups" style="margin-bottom: 24px;">No automatic backups found.</div>`;
+            }
+            
+            if (!isCurrent) {
+                html += `</div></details>`;
+            } else {
+                html += `</div>`;
+            }
+            return html;
+        }
+        
+        function renderBackupTable(serverName, files, isManual) {
+            let html = `
+            <table class="roster-table">
+                <thead>
+                    <tr>
+                        <th>Backup Archive</th>
+                        <th>Created At</th>
+                        <th>Size</th>
+                        <th style="width: 280px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+            `;
+            
+            files.forEach(file => {
+                let sizeStr = formatBytesMbGb(file.size || 0);
+                let timeStr = file.timestamp ? formatTimestamp(new Date(file.timestamp * 1000).toISOString()) : file.date;
+                let renameBtn = isManual ? `<button class="btn btn-outline" style="padding: 4px 10px; font-size: 0.85rem; border-color: var(--text-muted); color: var(--text-main);" onclick="renameBackup('${serverName}', '${file.filename}')">Rename</button>` : '';
+                let isInitial = file.filename.toLowerCase().includes('initialbackup');
+                let badge = isInitial ? ` <span style="font-size: 10px; background: var(--accent); color: white; padding: 2px 6px; border-radius: 8px; margin-left: 8px; vertical-align: middle;">Initial</span>` : '';
+                
+                html += `
+                <tr class="roster-row">
+                    <td class="fw-bold font-mono">
+                        <div style="display: flex; align-items: center;">
+                            ${file.filename}${badge}
+                        </div>
+                    </td>
+                    <td class="text-sm">${timeStr}</td>
+                    <td class="text-sm">${sizeStr}</td>
+                    <td>
+                        <div style="display: flex; gap: 8px;">
+                            ${renameBtn}
+                            <button class="btn btn-start" style="padding: 4px 10px; font-size: 0.85rem;" onclick="restoreBackup('${serverName}', '${file.filename}')">Restore</button>
+                            <button class="btn btn-outline" style="padding: 4px 10px; font-size: 0.85rem; border-color: var(--text-muted); color: var(--text-main);" onclick="window.location.href='/api/backup/download/${encodeURIComponent(serverName)}/${encodeURIComponent(file.filename)}'">Download</button>
+                            <button class="btn btn-stop" style="padding: 4px 10px; font-size: 0.85rem;" onclick="deleteBackup('${serverName}', '${file.filename}')">Delete</button>
+                        </div>
+                    </td>
+                </tr>
+                `;
+            });
+            
+            html += `</tbody></table>`;
+            return html;
+        }
+        
+        function showModal(title, message, isConfirm = false, showProgress = false, isDanger = false, isInput = false, inputValue = "") {
+            return new Promise((resolve) => {
+                const overlay = document.createElement('div');
+                overlay.className = 'modal-overlay';
+                
+                let actionsHTML = '';
+                
+                if (isConfirm) {
+                    let confirmClass = isDanger ? 'btn btn-stop' : 'btn btn-primary';
+                    actionsHTML = `
+                        <button id="modal-btn-yes" class="${confirmClass}" style="margin: 0;">Confirm</button>
+                        <button id="modal-btn-no" class="btn" style="margin: 0; background: #3f3f46; color: white;">Cancel</button>
+                    `;
+                } else if (!showProgress) {
+                    actionsHTML = `<button id="modal-btn-yes" class="btn btn-start">Okay</button>`;
+                }
+                
+                let inputHTML = '';
+                if (isInput) {
+                    inputHTML = `<input type="text" id="modal-input-field" value="${inputValue}" style="width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-dark); color: var(--text-main); margin-top: 16px; font-size: 0.9rem;">`;
+                    actionsHTML = `
+                        <button id="modal-btn-yes" class="btn btn-primary" style="margin: 0;">Save</button>
+                        <button id="modal-btn-no" class="btn" style="margin: 0; background: #3f3f46; color: white;">Cancel</button>
+                    `;
+                }
+
+                overlay.innerHTML = `
+                    <div class="modal-box">
+                        <div class="modal-title" id="modal-title-text">${title}</div>
+                        <div class="modal-msg" id="modal-msg-text">${message}</div>
+                        ${inputHTML}
+                        <div class="modal-actions" id="modal-actions">${actionsHTML}</div>
+                        <div class="modal-progress-container" id="modal-progress-container" style="display: ${showProgress ? 'block' : 'none'};">
+                            <div class="modal-progress-fill" id="modal-progress-fill"></div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(overlay);
+
+                if (isConfirm || isInput) {
+                    document.getElementById('modal-btn-no').onclick = () => { overlay.remove(); resolve(false); };
+                    document.getElementById('modal-btn-yes').onclick = () => { 
+                        let val = isInput ? document.getElementById('modal-input-field').value : true;
+                        overlay.remove(); 
+                        resolve(val); 
+                    };
+
+                } else if (!showProgress) {
+                    document.getElementById('modal-btn-yes').onclick = () => { overlay.remove(); resolve(true); };
+                }
+                
+                if (showProgress) {
+                    resolve({
+                        updateProgress: (percent) => {
+                            document.getElementById('modal-progress-fill').style.width = percent + '%';
+                            if (percent >= 100) document.getElementById('modal-msg-text').innerText = "Finishing up... Please wait.";
+                        },
+                        finish: (msg) => {
+                            document.getElementById('modal-title-text').innerText = "Success";
+                            document.getElementById('modal-msg-text').innerText = msg;
+                            document.getElementById('modal-progress-container').style.display = 'none';
+                            document.getElementById('modal-actions').innerHTML = `<button id="modal-btn-finish" class="btn btn-start">Okay</button>`;
+                            return new Promise((resFinish) => {
+                                document.getElementById('modal-btn-finish').onclick = () => { overlay.remove(); resFinish(); };
+                            });
+                        },
+                        error: (msg) => {
+                            document.getElementById('modal-title-text').innerText = "Error";
+                            document.getElementById('modal-title-text').style.color = "var(--accent-crimson)";
+                            document.getElementById('modal-msg-text').innerText = msg;
+                            document.getElementById('modal-progress-container').style.display = 'none';
+                            document.getElementById('modal-actions').innerHTML = `<button id="modal-btn-finish" class="btn" style="background: #3f3f46; color: white;">Dismiss</button>`;
+                            document.getElementById('modal-btn-finish').onclick = () => { overlay.remove(); };
+                        }
+                    });
+                }
+            });
+        }
+
+        async function renameBackup(serverName, oldName) {
+            let newName = await showModal("Rename Backup", "Enter new name for this backup (excluding .zip extension):", false, false, false, true, oldName.replace('.zip', ''));
+            if (!newName) return;
+            if (newName === oldName.replace('.zip', '')) return;
+            
+            try {
+                let formData = new FormData();
+                formData.append('server_name', serverName);
+                formData.append('old_name', oldName);
+                formData.append('new_name', newName);
+                
+                let res = await fetch('/api/backup/rename', { method: 'POST', body: formData });
+                let data = await res.json();
+                
+                if (data.status === 'success') {
+                    fetchBackups();
+                } else {
+                    await showModal("Error", data.message);
+                }
+            } catch(e) {
+                await showModal("Error", "Request failed.");
+            }
+        }
+        
+        async function createManualBackup() {
+            let confirmCreate = await showModal("Create Manual Backup", "Are you sure you want to create a new manual backup?", true);
+            if (!confirmCreate) return;
+            
+            let modal = await showModal("Creating Backup", "Compressing ecosystem into a ZIP archive... Please wait.", false, true);
+            let p = 0;
+            let anim = setInterval(() => { p += (95 - p) * 0.05; modal.updateProgress(p); }, 500);
+            
+            try {
+                let res = await fetch('/api/backup/create', { method: 'POST' });
+                let data = await res.json();
+                
+                clearInterval(anim);
+                modal.updateProgress(100);
+                
+                if (data.status === 'success') {
+                    await modal.finish("Backup created successfully!");
+                    fetchBackups();
+                } else {
+                    modal.error("Error: " + data.message);
+                }
+            } catch(e) {
+                clearInterval(anim);
+                modal.error("Request failed.");
+            }
+        }
+        
+        async function restoreBackup(serverName, filename) {
+            let confirmRestore = await showModal(
+                "Restore Backup", 
+                `Are you sure you want to restore ${filename}?<br><br>This will WIPE the current server data and replace it! The server will be stopped during this process.`, 
+                true, false, true
+            );
+            if(!confirmRestore) return;
+            
+            let modal = await showModal("Restoring Backup", "Extracting backup contents... Please wait.", false, true);
+            let p = 0;
+            let anim = setInterval(() => { p += (95 - p) * 0.05; modal.updateProgress(p); }, 500);
+            
+            try {
+                let res = await fetch('/api/backup/restore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ server_name: serverName, filename: filename })
+                });
+                let data = await res.json();
+                
+                clearInterval(anim);
+                modal.updateProgress(100);
+                
+                if (data.status === 'restored') {
+                    await modal.finish("Backup restored successfully!");
+                    window.location.reload();
+                } else {
+                    modal.error("Error: " + data.error);
+                    fetchBackups();
+                }
+            } catch(e) {
+                clearInterval(anim);
+                modal.error("Request failed.");
+                fetchBackups();
+            }
+        }
+        
+        async function deleteBackup(serverName, filename) {
+            let confirmDel = await showModal("Delete Backup", `Are you sure you want to delete ${filename}?`, true, false, true);
+            if(!confirmDel) return;
+            try {
+                let res = await fetch('/api/backup/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ server_name: serverName, filename: filename })
+                });
+                let data = await res.json();
+                if (data.status === 'success') {
+                    fetchBackups();
+                } else {
+                    await showModal("Error", "Failed to delete.");
+                }
+            } catch(e) {
+                await showModal("Error", "Request failed.");
+            }
+        }
+        
+        fetchBackups();
+    </script>
+    <div
+        style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
+        <div>Byte Panel {{ app_version }}</div>
+        <div>bytedev.app &copy; 2026</div>
+    </div>
+</body>
+</html>

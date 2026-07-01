@@ -28,7 +28,7 @@
                 <a href="/console" class="nav-link">Console</a>
                 <a href="/logs" class="nav-link">Logs</a>
                 <a href="/players" class="nav-link">Players</a>
-                <a href="/properties" class="nav-link">Properties</a>
+                <a href="/properties" class="nav-link">Properties</a>                <a href="/backups" class="nav-link">Backups</a>
                 <a href="/settings" class="nav-link active">Settings</a>
             </div>
             
@@ -95,14 +95,51 @@
                             </select>
                         </div>
                         
-                        <div style="margin-bottom: 8px; margin-top: 16px;">
-                            <label style="display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer;">
-                                <input type="checkbox" name="debug_mode" value="true" {% if config.get('debug_mode') %}checked{% endif %}>
-                                Enable Debug Mode
-                            </label>
-                            <small style="color: var(--text-muted); display: block; margin-top: 4px;">
-                                Shows additional backend diagnostic logs (like properties read/write events) in the server console.
-                            </small>
+                        <div style="margin-top: 16px; margin-bottom: 8px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">System Debug Messages</label>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <label style="position: relative; display: inline-block; width: 44px; height: 24px;">
+                                    <input type="checkbox" name="debug_mode" value="true" {% if config.get('debug_mode') %}checked{% endif %} style="opacity: 0; width: 0; height: 0; position: absolute;" onchange="this.nextElementSibling.style.backgroundColor = this.checked ? 'var(--accent)' : 'var(--bg-hover)'; this.nextElementSibling.firstElementChild.style.transform = this.checked ? 'translateX(20px)' : 'translateX(0)';">
+                                    <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: {% if config.get('debug_mode') %}var(--accent){% else %}var(--bg-hover){% endif %}; transition: .2s; border-radius: 24px;">
+                                        <span style="position: absolute; content: ''; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .2s; border-radius: 50%; transform: {% if config.get('debug_mode') %}translateX(20px){% else %}translateX(0){% endif %};"></span>
+                                    </span>
+                                </label>
+                                <small style="color: var(--text-muted);">Show system debug output in the server console.</small>
+                            </div>
+                        </div>
+                        
+                    </details>
+                    
+                    <details>
+                        <summary>Backup Settings</summary>
+                        <div style="margin-top: 16px; margin-bottom: 20px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Enable Automated Backups</label>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <label style="position: relative; display: inline-block; width: 44px; height: 24px;">
+                                    <input type="checkbox" name="auto_backup_enabled" value="true" {% if config.get('auto_backup_enabled') %}checked{% endif %} style="opacity: 0; width: 0; height: 0; position: absolute;" onchange="this.nextElementSibling.style.backgroundColor = this.checked ? 'var(--accent)' : 'var(--bg-hover)'; this.nextElementSibling.firstElementChild.style.transform = this.checked ? 'translateX(20px)' : 'translateX(0)';">
+                                    <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: {% if config.get('auto_backup_enabled') %}var(--accent){% else %}var(--bg-hover){% endif %}; transition: .2s; border-radius: 24px;">
+                                        <span style="position: absolute; content: ''; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .2s; border-radius: 50%; transform: {% if config.get('auto_backup_enabled') %}translateX(20px){% else %}translateX(0){% endif %};"></span>
+                                    </span>
+                                </label>
+                                <small style="color: var(--text-muted);">Automatically creates backups on a schedule.</small>
+                            </div>
+                        </div>
+                        
+                        <div style="margin-bottom: 16px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Backup Frequency</label>
+                            <select name="auto_backup_freq">
+                                <option value="hourly" {% if config.get('auto_backup_freq') == 'hourly' %}selected{% endif %}>Hourly</option>
+                                <option value="6_hours" {% if config.get('auto_backup_freq') == '6_hours' %}selected{% endif %}>6 Hours</option>
+                                <option value="12_hours" {% if config.get('auto_backup_freq') in ['12_hours', 'twice_daily'] %}selected{% endif %}>12 Hours</option>
+                                <option value="daily" {% if config.get('auto_backup_freq') == 'daily' %}selected{% endif %}>Daily</option>
+                                <option value="weekly" {% if config.get('auto_backup_freq', 'weekly') == 'weekly' %}selected{% endif %}>Weekly</option>
+                                <option value="monthly" {% if config.get('auto_backup_freq') == 'monthly' %}selected{% endif %}>Monthly</option>
+                            </select>
+                        </div>
+                        
+                        <div style="margin-bottom: 16px;">
+                            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Max Auto Backups to Keep</label>
+                            <input type="number" name="auto_backup_keep" value="{{ config.get('auto_backup_keep', 5) }}" min="1" max="50">
                         </div>
                     </details>
 
@@ -300,42 +337,51 @@
                 
                 <h3>System Operations</h3>
                 <div style="margin-bottom: 24px; display: flex; gap: 10px;">
-                    <div style="margin: 0; flex: 1; display: flex;">
-                        <button type="button" class="btn btn-restart" style="flex: 1;" onclick="executeBackup()">Backup ZIP</button>
-                    </div>
-                    <label class="btn btn-start" style="flex: 1; cursor: pointer; text-align: center; margin: 0; display: flex; align-items: center; justify-content: center;">
-                        Import Server ZIP
-                        <input type="file" id="import-zip" accept=".zip" style="display: none;" onchange="uploadImport(this.files[0])">
-                    </label>
-                    <button onclick="startPurgeWizard()" class="btn btn-stop" style="flex: 1;">Purge Ecosystem</button>
+                    <button type="button" class="btn btn-restart" style="flex: 1;" onclick="executeBackup()">Backup ZIP</button>
+                    <button type="button" class="btn btn-start" style="flex: 1;" onclick="promptImport()">Import Server ZIP</button>
+                    <input type="file" id="import-zip" accept=".zip" style="display: none;" onchange="uploadImport(this.files[0])">
+                    <button type="button" onclick="startPurgeWizard()" class="btn btn-stop" style="flex: 1;">Purge Ecosystem</button>
                 </div>
 
             </div>
         </div>
 
     <script>
-        function showModal(title, message, isConfirm = false, showProgress = false, isDanger = false) {
+        function showModal(title, message, isConfirm = false, showProgress = false, isDanger = false, customButtons = null, customSecondaryButtons = null) {
             return new Promise((resolve) => {
                 const overlay = document.createElement('div');
                 overlay.className = 'modal-overlay';
                 
                 let actionsHTML = '';
                 
-                if (isConfirm) {
+                if (customButtons) {
+                    actionsHTML = `<div style="display: flex; gap: 10px; width: 100%;">`;
+                    customButtons.forEach(b => {
+                        actionsHTML += `<button id="modal-btn-${b.id}" class="${b.class}" style="${b.style || 'flex: 1'}">${b.text}</button>`;
+                    });
+                    actionsHTML += `</div>`;
+                    if (customSecondaryButtons) {
+                        customSecondaryButtons.forEach(b => {
+                            actionsHTML += `<div style="width: 100%;"><button id="modal-btn-${b.id}" class="${b.class}" style="${b.style || 'flex: 1; width: 100%;'}">${b.text}</button></div>`;
+                        });
+                    }
+                } else if (isConfirm) {
                     let confirmClass = isDanger ? 'btn btn-stop' : 'btn btn-primary';
                     actionsHTML = `
-                        <button id="modal-btn-yes" class="${confirmClass}" style="margin: 0;">Confirm</button>
-                        <button id="modal-btn-no" class="btn" style="margin: 0; background: #3f3f46; color: white;">Cancel</button>
+                        <div style="display: flex; gap: 10px; width: 100%;">
+                            <button id="modal-btn-yes" class="${confirmClass}" style="flex: 1; margin: 0;">Confirm</button>
+                            <button id="modal-btn-no" class="btn" style="flex: 1; margin: 0; background: #3f3f46; color: white;">Cancel</button>
+                        </div>
                     `;
                 } else if (!showProgress) {
-                    actionsHTML = `<button id="modal-btn-yes" class="btn btn-start">Okay</button>`;
+                    actionsHTML = `<button id="modal-btn-yes" class="btn btn-start" style="width: 100%;">Okay</button>`;
                 }
 
                 overlay.innerHTML = `
                     <div class="modal-box">
                         <div class="modal-title" id="modal-title-text">${title}</div>
                         <div class="modal-msg" id="modal-msg-text">${message}</div>
-                        <div class="modal-actions" id="modal-actions">${actionsHTML}</div>
+                        <div class="modal-actions" id="modal-actions" style="flex-direction: column; gap: 10px; align-items: center;">${actionsHTML}</div>
                         <div class="modal-progress-container" id="modal-progress-container" style="display: ${showProgress ? 'block' : 'none'};">
                             <div class="modal-progress-fill" id="modal-progress-fill"></div>
                         </div>
@@ -343,7 +389,16 @@
                 `;
                 document.body.appendChild(overlay);
 
-                if (isConfirm) {
+                if (customButtons) {
+                    customButtons.forEach(b => {
+                        document.getElementById(`modal-btn-${b.id}`).onclick = () => { overlay.remove(); resolve(b.id); };
+                    });
+                    if (customSecondaryButtons) {
+                        customSecondaryButtons.forEach(b => {
+                            document.getElementById(`modal-btn-${b.id}`).onclick = () => { overlay.remove(); resolve(b.id); };
+                        });
+                    }
+                } else if (isConfirm) {
                     document.getElementById('modal-btn-no').onclick = () => { overlay.remove(); resolve(false); };
                     document.getElementById('modal-btn-yes').onclick = () => { overlay.remove(); resolve(true); };
                 } else if (!showProgress) {
@@ -377,6 +432,47 @@
                     });
                 }
             });
+        }
+
+        async function promptImport() {
+            let choice = await showModal("Import Backup", "How would you like to import a backup?", false, false, false, [
+                { id: 'upload', text: 'Upload ZIP', class: 'btn btn-primary' },
+                { id: 'existing', text: 'Existing Backup', class: 'btn btn-restart' }
+            ], [
+                { id: 'cancel', text: 'Cancel', class: 'btn', style: 'width: 100%; margin-top: 10px; background: #3f3f46; color: white;' }
+            ]);
+            
+            if (choice === 'upload') {
+                document.getElementById('import-zip').click();
+            } else if (choice === 'existing') {
+                window.location.href = "/backups";
+            }
+        }
+        
+        async function executeBackup() {
+            let confirmCreate = await showModal("Create Manual Backup", "Are you sure you want to create a new manual backup?", true);
+            if (!confirmCreate) return;
+            
+            let modal = await showModal("Creating Backup", "Compressing ecosystem into a ZIP archive... Please wait.", false, true);
+            let p = 0;
+            let anim = setInterval(() => { p += (95 - p) * 0.05; modal.updateProgress(p); }, 500);
+            
+            try {
+                let res = await fetch('/api/backup/create', { method: 'POST' });
+                let data = await res.json();
+                
+                clearInterval(anim);
+                modal.updateProgress(100);
+                
+                if (data.status === 'success') {
+                    await modal.finish("Backup created successfully!");
+                } else {
+                    modal.error("Error: " + data.message);
+                }
+            } catch(e) {
+                clearInterval(anim);
+                modal.error("Request failed.");
+            }
         }
 
         async function uploadImport(file) {
@@ -426,41 +522,6 @@
             xhr.send(formData);
         }
 
-        async function executeBackup() {
-            let stats = await fetch('/api/stats').then(res => res.json());
-            if (stats.status !== 'Offline') {
-                let stopConfirm = await showModal("Engine Active", "The server must be offline to backup. Do you want to stop it now?", true);
-                if (stopConfirm) {
-                    await fetch('/api/server/stop', { method: 'POST' });
-                    await showModal("Stopping Engine", "Stopping server. Please wait until it is fully offline in the Overview, then click Backup ZIP again.");
-                }
-                return;
-            }
-
-            let modal = await showModal("Creating Backup", "Compressing ecosystem into a ZIP archive... Please wait.", false, true);
-            let p = 0;
-            let anim = setInterval(() => { p += (95 - p) * 0.05; modal.updateProgress(p); }, 500);
-            
-            document.cookie = "backup_complete=; Max-Age=-99999999; path=/";
-            
-            let form = document.createElement('form');
-            form.action = '/api/backup';
-            form.method = 'POST';
-            document.body.appendChild(form);
-            form.submit();
-            document.body.removeChild(form);
-            
-            let checkCookie = setInterval(async () => {
-                if (document.cookie.indexOf('backup_complete=1') !== -1) {
-                    clearInterval(checkCookie);
-                    clearInterval(anim);
-                    modal.updateProgress(100);
-                    document.cookie = "backup_complete=; Max-Age=-99999999; path=/";
-                    await modal.finish("Backup created successfully! Your download should start automatically.");
-                }
-            }, 500);
-        }
-
         async function startPurgeWizard() {
             let stats = await fetch('/api/stats').then(res => res.json());
             if (stats.status !== 'Offline') {
@@ -472,8 +533,30 @@
                 return;
             }
             
-            let backupConfirm = await showModal("Backup Ecosystem", "Do you want to download a backup of your server before permanently deleting everything?", true);
-            if (backupConfirm) {
+            let backupChoice = await showModal("Backup Ecosystem", "Would you like to backup your server before permanently deleting everything?", false, false, false, [
+                { id: 'backup', text: 'Backup to server', class: 'btn btn-start' },
+                { id: 'download', text: 'Download backup', class: 'btn btn-primary' }
+            ], [
+                { id: 'none', text: 'No Backup', class: 'btn btn-stop', style: 'width: 100%; margin-top: 10px;' },
+                { id: 'cancel', text: 'Cancel', class: 'btn', style: 'width: 100%; margin-top: 10px; background: #3f3f46; color: white;' }
+            ]);
+            
+            if (backupChoice === 'cancel' || !backupChoice) return;
+            
+            if (backupChoice === 'backup') {
+                let modal = await showModal("Creating Backup", "Compressing ecosystem into a ZIP archive... Please wait.", false, true);
+                let p = 0;
+                let anim = setInterval(() => { p += (95 - p) * 0.05; modal.updateProgress(p); }, 500);
+                try {
+                    let res = await fetch('/api/backup/create', { method: 'POST' });
+                    clearInterval(anim);
+                    modal.updateProgress(100);
+                    await modal.finish("Backup created successfully on the server.");
+                } catch(e) {
+                    clearInterval(anim);
+                    await showModal("Error", "Request failed.");
+                }
+            } else if (backupChoice === 'download') {
                 let modal = await showModal("Creating Backup", "Compressing ecosystem into a ZIP archive... Please wait.", false, true);
                 let p = 0;
                 let anim = setInterval(() => { p += (95 - p) * 0.05; modal.updateProgress(p); }, 500);
@@ -519,7 +602,7 @@
         </div>
     </div>
     <div style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
-        <div>{{ app_version }}</div>
+        <div>Byte Panel {{ app_version }}</div>
         <div>bytedev.app &copy; 2026</div>
     </div>
 </body>
