@@ -1,0 +1,33 @@
+# Local source backups and runtime data must never be published.
+/backups/
+/data/
+/server/
+/logs/
+/plugin-config-backups/
+
+# Credentials, local environment overrides, and account databases.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+
+# Python caches and local development environments.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local tooling and editor state.
+.codex/
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db

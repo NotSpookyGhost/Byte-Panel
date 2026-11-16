@@ -1,0 +1,294 @@
+{
+  "root": {
+    "type": "EmailLayout",
+    "data": {
+      "backdropColor": "#000000",
+      "borderColor": null,
+      "borderRadius": 0,
+      "canvasColor": "#000000",
+      "textColor": "#242424",
+      "fontFamily": "MODERN_SANS",
+      "childrenIds": [
+        "block-1709571212684",
+        "block-1709571228545",
+        "block-1794859760368",
+        "block-1709571234315",
+        "block-1794858108471",
+        "block-1794858125222",
+        "block-1794858126478",
+        "block-1794858767908",
+        "block-1794858157814",
+        "block-1794858240584",
+        "block-1709571302968",
+        "block-1709571282795",
+        "block-1794859997796"
+      ]
+    }
+  },
+  "block-1709571212684": {
+    "type": "Image",
+    "data": {
+      "style": {
+        "padding": {
+          "top": 0,
+          "bottom": 24,
+          "right": 0,
+          "left": 0
+        }
+      },
+      "props": {
+        "width": null,
+        "url": "https://imgur.com/z8evHHi.jpg",
+        "alt": "Byte Panel",
+        "linkHref": "{{login_url}}",
+        "contentAlignment": "middle"
+      }
+    }
+  },
+  "block-1709571228545": {
+    "type": "Text",
+    "data": {
+      "style": {
+        "color": "#ffffff",
+        "fontWeight": "normal",
+        "padding": {
+          "top": 0,
+          "bottom": 16,
+          "right": 24,
+          "left": 24
+        }
+      },
+      "props": {
+        "text": "Hi {{username}} 👋,"
+      }
+    }
+  },
+  "block-1709571234315": {
+    "type": "Text",
+    "data": {
+      "style": {
+        "color": "#ffffff",
+        "fontWeight": "normal",
+        "textAlign": "center",
+        "padding": {
+          "top": 0,
+          "bottom": 24,
+          "right": 24,
+          "left": 24
+        }
+      },
+      "props": {
+        "text": " Your panel account is ready.\n\n\n"
+      }
+    }
+  },
+  "block-1709571282795": {
+    "type": "Image",
+    "data": {
+      "style": {
+        "padding": {
+          "top": 24,
+          "bottom": 0,
+          "right": 0,
+          "left": 0
+        }
+      },
+      "props": {
+        "url": "https://imgur.com/k0XccP9.jpg",
+        "alt": "Github Url - https://github.com/NotSpookyGhost/Byte-Panel",
+        "linkHref": "https://github.com/NotSpookyGhost/Byte-Panel",
+        "contentAlignment": "middle"
+      }
+    }
+  },
+  "block-1709571302968": {
+    "type": "Button",
+    "data": {
+      "style": {
+        "fontSize": 14,
+        "padding": {
+          "top": 16,
+          "bottom": 24,
+          "right": 24,
+          "left": 24
+        }
+      },
+      "props": {
+        "buttonBackgroundColor": "#0284C7",
+        "buttonStyle": "rectangle",
+        "fullWidth": false,
+        "size": "medium",
+        "text": "Server Panel",
+        "url": "{{login_url}}"
+      }
+    }
+  },
+  "block-1794858108471": {
+    "type": "Text",
+    "data": {
+      "style": {
+        "color": "#ffffff",
+        "backgroundColor": "#080808",
+        "fontSize": 18,
+        "fontWeight": "bold",
+        "padding": {
+          "top": 16,
+          "bottom": 8,
+          "right": 24,
+          "left": 24
+        }
+      },
+      "props": {
+        "text": "Your login details:\n"
+      }
+    }
+  },
+  "block-1794858125222": {
+    "type": "Text",
+    "data": {
+      "style": {
+        "color": "#ffffff",
+        "backgroundColor": "#080808",
+        "fontWeight": "normal",
+        "padding": {
+          "top": 0,
+          "bottom": 0,
+          "right": 24,
+          "left": 24
+        }
+      },
+      "props": {
+        "text": "- Panel: {{login_url}}\n"
+      }
+    }
+  },
+  "block-1794858126478": {
+    "type": "Text",
+    "data": {
+      "style": {
+        "color": "#ffffff",
+        "backgroundColor": "#080808",
+        "fontWeight": "normal",
+        "padding": {
+          "top": 4,
+          "bottom": 0,
+          "right": 24,
+          "left": 24
+        }
+      },
+      "props": {
+        "text": "- Username: {{username}}"
+      }
+    }
+  },
+  "block-1794858157814": {
+    "type": "Text",
+    "data": {
+      "style": {
+        "color": "#ffffff",
+        "fontWeight": "normal",
+        "padding": {
+          "top": 32,
+          "bottom": 16,
+          "right": 24,
+          "left": 24
+        }
+      },
+      "props": {
+        "text": "Your temporary password will arrive in a second email. Once you sign in, you’ll be asked to choose your own password before accessing the panel."
+      }
+    }
+  },
+  "block-1794858240584": {
+    "type": "Text",
+    "data": {
+      "style": {
+        "color": "#ffffff",
+        "fontWeight": "normal",
+        "padding": {
+          "top": 16,
+          "bottom": 16,
+          "right": 24,
+          "left": 24
+        }
+      },
+      "props": {
+        "text": "Click the Button below or the Link above to login."
+      }
+    }
+  },
+  "block-1794858767908": {
+    "type": "Container",
+    "data": {
+      "style": {
+        "borderColor": "#080808",
+        "padding": {
+          "top": 0,
+          "bottom": 0,
+          "right": 0,
+          "left": 0
+        }
+      },
+      "props": {
+        "childrenIds": [
+          "block-1794858788629"
+        ]
+      }
+    }
+  },
+  "block-1794858788629": {
+    "type": "Text",
+    "data": {
+      "style": {
+        "backgroundColor": "#080808",
+        "fontWeight": "normal",
+        "padding": {
+          "top": 16,
+          "bottom": 8,
+          "right": 0,
+          "left": 0
+        }
+      },
+      "props": {
+        "text": ""
+      }
+    }
+  },
+  "block-1794859760368": {
+    "type": "Heading",
+    "data": {
+      "props": {
+        "text": "Welcome to {{servername}}!"
+      },
+      "style": {
+        "color": "#FAFAFA",
+        "textAlign": "center",
+        "padding": {
+          "top": 16,
+          "bottom": 0,
+          "right": 24,
+          "left": 24
+        }
+      }
+    }
+  },
+  "block-1794859997796": {
+    "type": "Text",
+    "data": {
+      "style": {
+        "fontSize": 10,
+        "fontWeight": "normal",
+        "textAlign": "right",
+        "padding": {
+          "top": 0,
+          "bottom": 4,
+          "right": 0,
+          "left": 0
+        }
+      },
+      "props": {
+        "text": "Developed by Bytedev.app"
+      }
+    }
+  }
+}

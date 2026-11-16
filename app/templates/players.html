@@ -162,6 +162,7 @@
             }
         }
     </script>
+    {% include 'panel_access.html' %}
 </head>
 
 <body class="theme-{{ config.theme }}">
@@ -176,14 +177,16 @@
                 <h2>{{ config.panel_name }}</h2>
             </div>
             <a href="/overview">Overview</a>
-            <a href="/console">Console</a>
-            <a href="/logs">Logs</a>
-            <a href="/players" class="nav-link active">Players</a>
-            <a href="/properties" class="nav-link">Properties</a>            <a href="/backups" class="nav-link">Backups</a>
-            <a href="/settings" class="nav-link">Settings</a>
+            {% if can is not defined or can('console.view') %}<a href="/console">Console</a>{% endif %}
+            {% if can is not defined or can('logs.view') %}<a href="/logs">Logs</a>{% endif %}
+            {% if can is not defined or can('players.view') %}<a href="/players" class="nav-link active">Players</a>{% endif %}
+            {% include 'plugins_nav.html' %}
+            {% if can is not defined or can('properties.manage') %}<a href="/properties" class="nav-link">Properties</a>{% endif %}            {% if can is not defined or (can('backups.create') or can('backups.restore')) %}<a href="/backups" class="nav-link">Backups</a>{% endif %}
+            {% if can is not defined or can('settings.manage') %}<a href="/settings" class="nav-link">Settings</a>{% endif %}
+                {% include 'accounts_nav.html' %}
         </div>
         <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
-            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
+            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ current_user.username if current_user else config.admin_user }}</div>
             <form action="/logout" method="GET" style="margin: 0;">
                 <button type="submit" class="btn"
                     style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
@@ -245,7 +248,7 @@
                         </td>
                         <td class="font-mono text-sm">{{ p.last_ip }}</td>
                         <td class="text-sm">🌍 {{ p.country }}</td>
-                        <td class="actions-cell">
+                        <td class="actions-cell" data-permission="players.manage">
                             <button class="btn btn-restart btn-sm"
                                 onclick="openKickModal('{{ p.username }}', event)">Kick</button>
                             {% if p.ban_status %}
@@ -276,7 +279,7 @@
                 placeholder="Optional reason..." onkeydown="if(event.key === 'Enter') executeKick()">
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="btn btn-outline" onclick="closeKickModal()">Cancel</button>
-                <button class="btn btn-restart" onclick="executeKick()">Confirm Kick</button>
+                <button data-permission="players.manage" class="btn btn-restart" onclick="executeKick()">Confirm Kick</button>
             </div>
         </div>
     </div>
@@ -304,7 +307,7 @@
                 placeholder="Optional reason..." onkeydown="if(event.key === 'Enter') executeBan()">
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="btn btn-outline" onclick="closeBanModal()">Cancel</button>
-                <button class="btn btn-stop" onclick="executeBan()">Confirm Ban</button>
+                <button data-permission="players.manage" class="btn btn-stop" onclick="executeBan()">Confirm Ban</button>
             </div>
         </div>
     </div>
@@ -733,11 +736,11 @@
 
             document.getElementById('modalStatus').innerHTML = statusHtml;
 
-            let actionsHtml = `<button class="btn btn-restart" style="flex: 1;" onclick="openKickModal('${username}', null)">Kick Active Session</button>`;
+            let actionsHtml = `<button data-permission="players.manage" class="btn btn-restart" style="flex: 1;" onclick="openKickModal('${username}', null)">Kick Active Session</button>`;
             if (isBanned) {
-                actionsHtml += `<button class="btn btn-outline" style="flex: 1;" onclick="moderatePlayerDirect('unban', '${username}', '${lastIp}', null)">Unban Player</button>`;
+                actionsHtml += `<button data-permission="players.manage" class="btn btn-outline" style="flex: 1;" onclick="moderatePlayerDirect('unban', '${username}', '${lastIp}', null)">Unban Player</button>`;
             } else {
-                actionsHtml += `<button class="btn btn-stop" style="flex: 1;" onclick="openBanModal('${username}', '${lastIp}', null)">Execute Ban</button>`;
+                actionsHtml += `<button data-permission="players.manage" class="btn btn-stop" style="flex: 1;" onclick="openBanModal('${username}', '${lastIp}', null)">Execute Ban</button>`;
             }
             document.getElementById('auditModalActions').innerHTML = actionsHtml;
 
@@ -795,11 +798,11 @@
                         let statusHtml = p.online_status ? '<span class="status-badge status-online">Online</span>' : '<span class="status-badge status-offline">Offline</span>';
                         if (p.ban_status) statusHtml += ' <span class="status-badge status-banned">Banned</span>';
 
-                        let actionsHtml = `<button class="btn btn-restart btn-sm" onclick="openKickModal('${p.username}', event)">Kick</button> `;
+                        let actionsHtml = `<button data-permission="players.manage" class="btn btn-restart btn-sm" onclick="openKickModal('${p.username}', event)">Kick</button> `;
                         if (p.ban_status) {
-                            actionsHtml += `<button class="btn btn-outline btn-sm" onclick="moderatePlayerDirect('unban', '${p.username}', '${p.last_ip}', event)">Unban</button>`;
+                            actionsHtml += `<button data-permission="players.manage" class="btn btn-outline btn-sm" onclick="moderatePlayerDirect('unban', '${p.username}', '${p.last_ip}', event)">Unban</button>`;
                         } else {
-                            actionsHtml += `<button class="btn btn-stop btn-sm" onclick="openBanModal('${p.username}', '${p.last_ip}', event)">Ban</button>`;
+                            actionsHtml += `<button data-permission="players.manage" class="btn btn-stop btn-sm" onclick="openBanModal('${p.username}', '${p.last_ip}', event)">Ban</button>`;
                         }
 
                         tr.innerHTML = `

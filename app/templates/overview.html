@@ -10,6 +10,7 @@
     {% else %}
     <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
     {% endif %}
+    {% include 'panel_access.html' %}
 </head>
 
 <body class="theme-{{ config.theme }}">
@@ -24,14 +25,16 @@
                 <h2>{{ config.panel_name }}</h2>
             </div>
             <a href="/overview" class="active">Overview</a>
-            <a href="/console">Console</a>
-            <a href="/logs">Logs</a>
-            <a href="/players">Players</a>
-            <a href="/properties">Properties</a>            <a href="/backups">Backups</a>
-            <a href="/settings">Settings</a>
+            {% if can is not defined or can('console.view') %}<a href="/console">Console</a>{% endif %}
+            {% if can is not defined or can('logs.view') %}<a href="/logs">Logs</a>{% endif %}
+            {% if can is not defined or can('players.view') %}<a href="/players">Players</a>{% endif %}
+            {% include 'plugins_nav.html' %}
+            {% if can is not defined or can('properties.manage') %}<a href="/properties">Properties</a>{% endif %}            {% if can is not defined or (can('backups.create') or can('backups.restore')) %}<a href="/backups">Backups</a>{% endif %}
+            {% if can is not defined or can('settings.manage') %}<a href="/settings">Settings</a>{% endif %}
+                {% include 'accounts_nav.html' %}
         </div>
         <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
-            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
+            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ current_user.username if current_user else config.admin_user }}</div>
             <form action="/logout" method="GET" style="margin: 0;">
                 <button type="submit" class="btn"
                     style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
@@ -43,9 +46,9 @@
             <div>Server Overview | Status: <strong id="top-status" style="color: var(--text-muted);">Offline</strong>
             </div>
             <div style="display:flex; gap:10px;">
-                <button class="btn btn-start" onclick="triggerAction('start')">Start</button>
-                <button class="btn btn-stop" onclick="triggerAction('stop')">Stop</button>
-                <button class="btn btn-restart" onclick="triggerAction('restart')">Restart</button>
+                <button data-permission="server.control" class="btn btn-start" onclick="triggerAction('start')">Start</button>
+                <button data-permission="server.control" class="btn btn-stop" onclick="triggerAction('stop')">Stop</button>
+                <button data-permission="server.control" class="btn btn-restart" onclick="triggerAction('restart')">Restart</button>
             </div>
         </div>
         <div class="main-content">
@@ -121,7 +124,7 @@
             options: { ...commonChartOptions, scales: { y: { display: false, min: 0, max: 100 } } }
         });
 
-        let maxRamGB = {{ config.ram_allocation | default (2) }};
+        let maxRamGB = {{ config.ram_gb | default (2) }};
         let maxRamMB = maxRamGB * 1024;
 
         let ramChart = new Chart(document.getElementById('ramChart'), {

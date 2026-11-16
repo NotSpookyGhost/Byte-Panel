@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Accounts{% endblock %} - {{ config.panel_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='accounts.css', v=app_version) }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='password_policy.css', v=app_version) }}">
+    {% include 'panel_access.html' %}
+    <script src="{{ url_for('static', filename='password_policy.js', v=app_version) }}" defer></script>
+    <script src="{{ url_for('static', filename='accounts.js', v=app_version) }}" defer></script>
+</head>
+<body class="theme-{{ config.theme }} accounts-page">
+    <aside class="sidebar">
+        <nav class="nav-group" aria-label="Panel navigation">
+            <div class="sidebar-header"><h2>{{ config.panel_name }}</h2></div>
+            {% if not current_user.must_change_password %}<a class="nav-link" href="/overview">Overview</a>{% endif %}
+            {% if can('console.view') %}<a class="nav-link" href="/console">Console</a>{% endif %}
+            {% if can('logs.view') %}<a class="nav-link" href="/logs">Logs</a>{% endif %}
+            {% if can('players.view') %}<a class="nav-link" href="/players">Players</a>{% endif %}
+            {% include 'plugins_nav.html' %}
+            {% if can('properties.manage') %}<a class="nav-link" href="/properties">Properties</a>{% endif %}
+            {% if (can('backups.create') or can('backups.restore')) %}<a class="nav-link" href="/backups">Backups</a>{% endif %}
+            {% if can('settings.manage') %}<a class="nav-link" href="/settings">Settings</a>{% endif %}
+            {% if can('users.manage') %}<a class="nav-link{% if request.path == '/users' %} active{% endif %}" href="/users">Users</a>{% endif %}
+            <a class="nav-link{% if request.path == '/account' %} active{% endif %}" href="/account">My account</a>
+        </nav>
+        <div class="accounts-footer"><span>{{ current_user.username }}</span><a class="btn btn-outline" href="/logout">Logout</a></div>
+    </aside>
+    <main class="main-layout"><div class="main-content">
+        {% block content %}{% endblock %}
+        <p class="accounts-hint">Byte Panel {{ app_version }}</p>
+    </div></main>
+</body>
+</html>

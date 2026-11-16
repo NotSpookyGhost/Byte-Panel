@@ -10,6 +10,7 @@
     {% else %}
     <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
     {% endif %}
+    {% include 'panel_access.html' %}
 </head>
 <body class="theme-{{ config.theme }}">
 
@@ -25,15 +26,17 @@
                 </div>
 
                 <a href="/overview" class="nav-link">Overview</a>
-                <a href="/console" class="nav-link">Console</a>
-                <a href="/logs" class="nav-link">Logs</a>
-                <a href="/players" class="nav-link">Players</a>
-                <a href="/properties" class="nav-link active">Properties</a>                <a href="/backups" class="nav-link">Backups</a>
-                <a href="/settings" class="nav-link">Settings</a>
+                {% if can is not defined or can('console.view') %}<a href="/console" class="nav-link">Console</a>{% endif %}
+                {% if can is not defined or can('logs.view') %}<a href="/logs" class="nav-link">Logs</a>{% endif %}
+                {% if can is not defined or can('players.view') %}<a href="/players" class="nav-link">Players</a>{% endif %}
+                {% include 'plugins_nav.html' %}
+                {% if can is not defined or can('properties.manage') %}<a href="/properties" class="nav-link active">Properties</a>{% endif %}                {% if can is not defined or (can('backups.create') or can('backups.restore')) %}<a href="/backups" class="nav-link">Backups</a>{% endif %}
+                {% if can is not defined or can('settings.manage') %}<a href="/settings" class="nav-link">Settings</a>{% endif %}
+                {% include 'accounts_nav.html' %}
             </div>
             
             <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
-                <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
+                <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ current_user.username if current_user else config.admin_user }}</div>
                 <form action="/logout" method="GET" style="margin: 0;">
                     <button type="submit" class="btn" style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
                 </form>

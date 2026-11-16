@@ -11,12 +11,20 @@ import signal
 import shutil
 import zipfile
 import sqlite3
+import hashlib
 import urllib.request
+from contextlib import closing
 import geoip2.database
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory, send_file, make_response
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory, send_file, make_response, g, abort
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
 from datetime import datetime
+from plugin_manager import register_plugin_manager
+from panel_security import PanelSecurity
+from panel_accounts import grants, session_grants
+from minecraft_releases import MinecraftReleases, DOWNLOAD_HEADERS, java_path
+
+release_service = MinecraftReleases()
 
 def get_client_ip():
     """Extracts the real IP address, bypassing reverse proxy obfuscation."""
@@ -50,8 +58,8 @@ except Exception:
     print("vUnknown")
 
 app = Flask(__name__)
-app.secret_key = os.getenv("PANEL_SECRET_KEY", "mc-panel-secure-key-2026")
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Socket events only read Flask's signed session; do not create a stale session fork.
+socketio = SocketIO(app, manage_session=False)
 
 @app.context_processor
 def inject_version():
@@ -64,7 +72,7 @@ def inject_version():
     return dict(app_version=f"v{v}")
 
 # --- Predefined Storage Path Architecture ---
-DATA_DIR = "/data"
+DATA_DIR = os.getenv('PANEL_DATA_DIR', '/data')
 BRANDING_DIR = os.path.join(DATA_DIR, "branding")
 SERVER_DIR = os.path.join(DATA_DIR, "server")
 os.makedirs(BRANDING_DIR, exist_ok=True)
@@ -139,16 +147,20 @@ ensure_geoip_db()
 
 # --- Global State Variables ---
 MINECRAFT_PROCESS = None
+MINECRAFT_LOG_THREAD = None
 CONSOLE_HISTORY = []
 
 # --- Core System Configuration Fallbacks ---
 DEFAULT_CONFIG = {
     "admin_user": "admin",
-    "admin_pass": "admin",
     "is_setup": False,
     "mc_version": "",
     "server_type": "",
     "java_path": "",
+    "forge_version": "",
+    "forge_full_version": "",
+    "launch_type": "",
+    "launch_target": "",
     "theme": "dark",
     "panel_name": "Portal Node",
     "bg_blur": 5,
@@ -171,8 +183,11 @@ def load_config():
         return conf
 
 def save_config(config):
+    config.pop('admin_pass', None)
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=4)
+
+security = PanelSecurity(app, DATA_DIR, load_config, save_config, lambda: get_custom_assets_state())
 
 def load_player_history():
     file_path = os.path.join(DATA_DIR, "player_history.json")
@@ -188,6 +203,19 @@ def save_player_history(data):
     file_path = os.path.join(DATA_DIR, "player_history.json")
     with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
+
+def clear_player_data():
+    """Reset server-scoped player records without deleting an active SQLite/WAL file."""
+    with closing(sqlite3.connect(PLAYER_DB_FILE)) as conn:
+        with conn:
+            conn.execute("DELETE FROM login_events")
+            conn.execute("DELETE FROM ban_events")
+            conn.execute("DELETE FROM users")
+            conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('login_events', 'ban_events')")
+            try:
+                os.remove(os.path.join(DATA_DIR, "player_history.json"))
+            except FileNotFoundError:
+                pass
 
 def _log_to_console(msg):
     config = load_config()
@@ -279,6 +307,8 @@ def sync_bans_from_server():
             pass
             
     conn = sqlite3.connect(PLAYER_DB_FILE)
+    # Serialize the snapshot and history writes with a concurrent player purge.
+    conn.execute("BEGIN IMMEDIATE")
     users = conn.execute('''
         SELECT u.uuid, u.ban_status,
                (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip
@@ -337,26 +367,93 @@ def sync_bans_from_server():
 
 def get_java_version_path(mc_version):
     try:
-        # Handle 26.x series (Java 25)
-        if mc_version.startswith("26."):
-            return "/usr/lib/jvm/java-25-openjdk/bin/java"
-            
-        parts = mc_version.split(".")
-        major = int(parts[0])
-        minor = int(parts[1]) if len(parts) > 1 else 0
-        
-        # Handle the mid-cycle Java 21 split
-        if mc_version in ["1.20.5", "1.20.6"] or (major == 1 and minor >= 21):
-            return "/usr/lib/jvm/java-21-openjdk/bin/java"
-        elif major == 1 and minor >= 17:
-            return "/usr/lib/jvm/java-17-openjdk/bin/java"
-        elif major == 1 and minor == 16:
-            return "/usr/lib/jvm/java-11-openjdk/bin/java"
-        else:
-            return "/usr/lib/jvm/java-1.8-openjdk/jre/bin/java"
-            
-    except (ValueError, IndexError):
+        return java_path(mc_version)
+    except (ValueError, TypeError):
         return "/usr/bin/java"
+
+def get_configured_java_path(config):
+    """Honor a configured Java binary, otherwise select one for the MC version."""
+    configured_path = str(config.get('java_path') or '').strip()
+    if configured_path:
+        return configured_path
+    return get_java_version_path(config.get('mc_version', ''))
+
+def resolve_forge_version(mc_version):
+    """Resolve an MC version to Forge's recommended build, or latest as fallback."""
+    return release_service.forge_version(mc_version)
+
+def _server_relative_path(path):
+    """Return a safe path under SERVER_DIR for persisted launch metadata."""
+    absolute_path = os.path.abspath(path)
+    server_root = os.path.abspath(SERVER_DIR)
+    if os.path.commonpath([absolute_path, server_root]) != server_root:
+        raise RuntimeError("Launch target must be inside the Minecraft server directory.")
+    return os.path.relpath(absolute_path, server_root)
+
+def discover_forge_launch_target(config):
+    """Prefer modern Forge's unix_args file, with legacy jar fallbacks."""
+    configured_type = config.get('launch_type')
+    configured_target = config.get('launch_target')
+    if configured_type in ('forge_args', 'jar') and configured_target:
+        configured_path = os.path.join(SERVER_DIR, configured_target)
+        if os.path.isfile(configured_path):
+            return configured_type, _server_relative_path(configured_path)
+
+    full_version = str(config.get('forge_full_version') or '').strip()
+    if full_version:
+        expected_args = os.path.join(
+            SERVER_DIR, 'libraries', 'net', 'minecraftforge', 'forge',
+            full_version, 'unix_args.txt'
+        )
+        if os.path.isfile(expected_args):
+            return 'forge_args', _server_relative_path(expected_args)
+
+    forge_library_root = os.path.join(
+        SERVER_DIR, 'libraries', 'net', 'minecraftforge', 'forge'
+    )
+    discovered_args = []
+    if os.path.isdir(forge_library_root):
+        for root, _, files in os.walk(forge_library_root):
+            if 'unix_args.txt' in files:
+                discovered_args.append(os.path.join(root, 'unix_args.txt'))
+    if discovered_args:
+        discovered_args.sort(key=os.path.getmtime, reverse=True)
+        return 'forge_args', _server_relative_path(discovered_args[0])
+
+    legacy_jars = []
+    for filename in os.listdir(SERVER_DIR):
+        lower_name = filename.lower()
+        if (lower_name.startswith('forge-') and lower_name.endswith('.jar')
+                and 'installer' not in lower_name):
+            legacy_jars.append(filename)
+    if legacy_jars:
+        legacy_jars.sort(key=lambda name: ('universal' in name.lower(), name))
+        return 'jar', legacy_jars[0]
+
+    server_jar = os.path.join(SERVER_DIR, 'server.jar')
+    if os.path.isfile(server_jar):
+        return 'jar', 'server.jar'
+
+    raise FileNotFoundError(
+        "Forge installation is incomplete: no unix_args.txt or runnable Forge jar was found."
+    )
+
+def build_server_command(config, ram_gb=None):
+    """Build an engine-aware command for setup boot and normal lifecycle actions."""
+    memory_gb = ram_gb if ram_gb is not None else config.get('ram_gb', 2)
+    java_bin = get_configured_java_path(config)
+    memory_args = [f"-Xmx{memory_gb}G", f"-Xms{memory_gb}G"]
+
+    if config.get('server_type') == 'Forge':
+        launch_type, launch_target = discover_forge_launch_target(config)
+        if launch_type == 'forge_args':
+            return [java_bin, *memory_args, f"@{launch_target}", 'nogui']
+        return [java_bin, *memory_args, '-jar', launch_target, 'nogui']
+
+    server_jar = os.path.join(SERVER_DIR, 'server.jar')
+    if not os.path.isfile(server_jar):
+        raise FileNotFoundError("server.jar is missing from the server directory.")
+    return [java_bin, *memory_args, '-jar', server_jar, 'nogui']
 
 def parse_log_line(line):
     join_match = re.search(r"UUID of player (.+?) is (.+)", line)
@@ -407,16 +504,25 @@ def monitor_minecraft_stream(process):
             CONSOLE_HISTORY.pop(0)
             
         parse_log_line(decoded_line)
-        socketio.emit('console_output', {'data': decoded_line})
+        security.emit_console(socketio, decoded_line)
     process.stdout.close()
 
 def start_minecraft_server():
-    global MINECRAFT_PROCESS
+    global MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
     config = load_config()
 
-    if config.get('is_running', False):
+    configured_pid = config.get('server_pid')
+    process_is_live = MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None
+    configured_pid_is_live = configured_pid and psutil.pid_exists(configured_pid)
+    if process_is_live or configured_pid_is_live:
         print("[WATCHDOG] ERROR: Cannot start. Server is already running.", flush=True)
         return False
+
+    # Clear stale state left behind by a process that exited between status polls.
+    config['is_running'] = False
+    config['server_pid'] = None
+    config['target_state'] = 'Offline'
+    save_config(config)
 
     version = config.get('mc_version')
     ram_gb = config.get('ram_gb', 2)
@@ -425,28 +531,15 @@ def start_minecraft_server():
         print("[WATCHDOG] ERROR: Cannot start. No Minecraft version found in config.", flush=True)
         return False
 
-    java_bin = get_java_version_path(version)
-    server_jar = os.path.join(SERVER_DIR, "server.jar")
-
-    if not os.path.exists(server_jar):
-        print("[WATCHDOG] ERROR: server.jar is missing from the server directory!", flush=True)
-        return False
-
     # 1. Bypass the EULA Crash
     eula_path = os.path.join(SERVER_DIR, "eula.txt")
     with open(eula_path, "w") as f:
         f.write("eula=true\n")
 
-    # 2. Build the Java Execution Command
-# Build the Java Execution Command dynamically
-    cmd = [
-        java_bin, 
-        f"-Xmx{ram_gb}G", 
-        f"-Xms{ram_gb}G", 
-        "-jar", server_jar, "nogui"
-    ]
-
     try:
+        # 2. Build the engine-specific Java execution command.
+        cmd = build_server_command(config, ram_gb)
+
         # 3. Launch in the background and pipe output to a log file
         log_path = os.path.join(SERVER_DIR, "console.log")
         history_path = os.path.join(DATA_DIR, "logs", "full_console_history.log")
@@ -497,8 +590,22 @@ def start_minecraft_server():
             bufsize=1
         )
         MINECRAFT_PROCESS = process
+
+        # Catch invalid launch targets and immediate JVM failures before claiming success.
+        time.sleep(0.75)
+        if process.poll() is not None:
+            startup_output = process.stdout.read() if process.stdout else ''
+            if startup_output:
+                log_file.write(startup_output)
+                log_file.flush()
+            log_file.close()
+            raise RuntimeError(
+                f"Minecraft exited during startup with code {process.returncode}. "
+                f"{startup_output[-500:].strip()}"
+            )
         
         def stream_logger(proc, log_f):
+            global MINECRAFT_PROCESS
             pending_uuids = {} # username -> uuid map
             
             for line in proc.stdout:
@@ -571,19 +678,35 @@ def start_minecraft_server():
                 conn.commit()
                 conn.close()
             except: pass
+
+            exit_config = load_config()
+            if exit_config.get('server_pid') == proc.pid:
+                exit_config['is_running'] = False
+                exit_config['server_pid'] = None
+                exit_config['target_state'] = 'Offline'
+                save_config(exit_config)
+            if MINECRAFT_PROCESS is proc:
+                MINECRAFT_PROCESS = None
             
-        threading.Thread(target=stream_logger, args=(process, log_file), daemon=True).start()
-        
         # 4. Save the Process ID (PID) so the Stop button knows what to kill later
         config['server_pid'] = process.pid
         config['is_running'] = True
         config['target_state'] = 'Online'
         save_config(config)
+
+        # Start log consumption only after state is persisted so a fast process exit
+        # cannot race with this function and leave a stale online flag behind.
+        MINECRAFT_LOG_THREAD = threading.Thread(target=stream_logger, args=(process, log_file), daemon=True)
+        MINECRAFT_LOG_THREAD.start()
         
         print(f"[WATCHDOG] SERVER LAUNCH: '{version}' started successfully on PID {process.pid}.", flush=True)
         return True
 
     except Exception as e:
+        config['is_running'] = False
+        config['server_pid'] = None
+        config['target_state'] = 'Offline'
+        save_config(config)
         print(f"[WATCHDOG] LAUNCH FAILURE: {str(e)}", flush=True)
         return False
 
@@ -655,35 +778,40 @@ def stop_minecraft_server():
 
 # --- HTTP Routing & Middleware ---
 
+def checked_backup_path(server_name, filename):
+    for value in (server_name, filename):
+        if not isinstance(value, str) or not value or value in ('.', '..') or any(c in value for c in '/\\:'):
+            abort(400, description='Invalid backup path.')
+    root = os.path.realpath(os.path.join(DATA_DIR, 'backups'))
+    path = os.path.realpath(os.path.join(root, server_name, filename))
+    if os.path.commonpath([root, path]) != root or not filename.lower().endswith('.zip'):
+        abort(400, description='Invalid backup path.')
+    return path
+
+def validate_server_zip(path):
+    """Validate before deleting any current server files."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            for member in archive.infolist():
+                name = member.filename.replace('\\', '/')
+                if name.startswith('/') or ':' in name or '..' in name.split('/') or (member.external_attr >> 16) & 0o170000 == 0o120000:
+                    abort(400, description='Unsafe path in server ZIP.')
+            if archive.testzip():
+                abort(400, description='The ZIP contains a damaged file.')
+    except (zipfile.BadZipFile, RuntimeError, NotImplementedError):
+        abort(400, description='Upload a valid, unencrypted server ZIP.')
+
 # Wire it to a Flask Route
 @app.route('/stop', methods=['POST'])
 def stop_server():
     stop_minecraft_server()
     return redirect(url_for('overview'))
 
-@app.before_request
-def check_auth_and_setup():
-    config = load_config()
-    public_routes = ['login', 'static', 'serve_custom_branding', 'api_list_backups']
-    
-    if not config.get('is_setup'):
-        public_routes.extend(['setup', 'import_server', 'welcome', 'api_setup_progress', 'import_zip'])
-
-    if request.endpoint and request.endpoint not in public_routes and not request.path.startswith('/api/import'):
-        if not session.get('logged_in'):
-            return redirect(url_for('login'))
-            
-        if not config.get('is_setup'):
-            if not config.get('welcome_seen') and request.endpoint != 'welcome':
-                return redirect(url_for('welcome'))
-            elif config.get('welcome_seen') and request.endpoint not in ['setup', 'import_server', 'welcome']:
-                return redirect(url_for('setup'))
-
 @app.route('/api/backup/download/<server_name>/<filename>')
 def api_download_backup(server_name, filename):
     safe_name = os.path.basename(server_name)
     safe_file = os.path.basename(filename)
-    path = os.path.join(DATA_DIR, "backups", safe_name, safe_file)
+    path = checked_backup_path(server_name, filename)
     if os.path.exists(path):
         return send_file(path, as_attachment=True, download_name=safe_file)
     return "Not Found", 404
@@ -697,7 +825,7 @@ def api_delete_backup():
     if server_name and filename:
         safe_name = os.path.basename(server_name)
         safe_file = os.path.basename(filename)
-        path = os.path.join(DATA_DIR, "backups", safe_name, safe_file)
+        path = checked_backup_path(server_name, filename)
         if os.path.exists(path):
             os.remove(path)
             return jsonify({"status": "success"})
@@ -717,10 +845,11 @@ def api_restore_backup():
         
     safe_name = os.path.basename(server_name)
     safe_file = os.path.basename(filename)
-    path = os.path.join(DATA_DIR, "backups", safe_name, safe_file)
+    path = checked_backup_path(server_name, filename)
     
     if not os.path.exists(path):
         return jsonify({"error": "File not found"}), 404
+    validate_server_zip(path)
         
     global MINECRAFT_PROCESS
     if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
@@ -748,6 +877,29 @@ def api_restore_backup():
         history_file = os.path.join(DATA_DIR, "player_history.json")
         shutil.move(imported_history, history_file)
         
+    imported_config = os.path.join(SERVER_DIR, "panel_config.json")
+    if os.path.exists(imported_config):
+        try:
+            with open(imported_config, 'r') as f:
+                b_conf = json.load(f)
+
+            curr_conf = load_config()
+            for key in [
+                'server_name', 'mc_version', 'server_type', 'ram_gb', 'java_path',
+                'forge_version', 'forge_full_version', 'launch_type', 'launch_target'
+            ]:
+                if key in b_conf:
+                    curr_conf[key] = b_conf[key]
+
+            save_config(curr_conf)
+        except Exception as e:
+            pass
+        finally:
+            try: os.remove(imported_config)
+            except: pass
+
+    actor = security.store.reset(keep_actor=g.panel_user)
+    security.store.sign_in(session, actor)
     return jsonify({"status": "restored"})
 
 @app.route('/api/backups/list')
@@ -802,8 +954,8 @@ def rename_backup():
         
     backups_dir = os.path.join(DATA_DIR, "backups")
     srv_path = os.path.join(backups_dir, server_name)
-    old_path = os.path.join(srv_path, old_name)
-    new_path = os.path.join(srv_path, new_name)
+    old_path = checked_backup_path(server_name, old_name)
+    new_path = checked_backup_path(server_name, new_name)
     
     if not os.path.exists(old_path):
         return jsonify({"status": "error", "message": "Backup not found"})
@@ -833,26 +985,26 @@ def login():
     if request.method == 'POST':
         # Retrieve input safely
         username = request.form.get('username', '').strip()
-        password = request.form.get('password', '').strip()
+        password = request.form.get('password', '')
         client_ip = get_client_ip()
         
         config = load_config()
         
         # Authentication Validation
-        if username == config.get('admin_user') and password == config.get('admin_pass'):
-            session['logged_in'] = True
+        user, login_error = security.login(username, password)
+        if user:
             
             # SUCCESS LOG: flush=True forces the log straight to Docker/Supervisord stdout
             print(f"[WATCHDOG] AUTH SUCCESS: User '{username}' authenticated from IP: {client_ip}", flush=True)
             
-            return redirect(url_for('overview'))
+            return redirect(url_for('accounts.my_account' if user['must_change_password'] else 'overview'))
             
         else:
             # FAILURE LOG: Crucial for brute-force watchdog tracking
             print(f"[WATCHDOG] AUTH FAILURE: Invalid credentials for '{username}' from IP: {client_ip}", flush=True)
             
             # (Optional) flash('Invalid credentials', 'error')
-            return render_template('login.html', error="Invalid username or password.", config=config, has_custom=get_custom_assets_state())
+            return render_template('login.html', error=login_error, config=config, has_custom=get_custom_assets_state()), 401
             
     return render_template('login.html', config=load_config(), has_custom=get_custom_assets_state())
 
@@ -874,7 +1026,14 @@ def welcome():
         
     return render_template('welcome.html')
 
-SETUP_PROGRESS = {"percent": 0, "msg": "Ready"}
+SETUP_PROGRESS = {"percent": 0, "msg": "Ready", "status": "idle"}
+
+@app.route('/api/minecraft/versions')
+def api_minecraft_versions():
+    try:
+        return jsonify(release_service.catalog())
+    except RuntimeError as error:
+        return jsonify(error=str(error)), 503
 
 @app.route('/setup', methods=['GET', 'POST'])
 def setup():
@@ -883,7 +1042,8 @@ def setup():
     max_ram = get_system_ram_gb() # Fetch the max RAM
     if request.method == 'POST':
 
-        print(f"[WATCHDOG] INCOMING SETUP DATA: {request.form}", flush=True)
+        if SETUP_PROGRESS.get('status') == 'running':
+            return jsonify(error='Server setup is already running.'), 409
 
         server_type = request.form.get('server_type')
         version = request.form.get('version')
@@ -891,13 +1051,13 @@ def setup():
         # Capture the RAM slider value (default to 2 if missing)
         ram_allocation = request.form.get('ram_allocation', '2')
 
-        admin_user = request.form.get('admin_username') 
-        admin_pass = request.form.get('admin_password')
-        
-        if not all([server_type, version, admin_user, admin_pass]):
-            print("[WATCHDOG] ERROR: Missing required form fields!", flush=True)
-            # You can flash an error here or redirect back to setup
-            return redirect(url_for('setup'))
+        try:
+            catalog = release_service.catalog()
+            selected = next((item for item in catalog['versions'] if item['version'] == version), None)
+            if not selected or server_type not in selected['engines']:
+                return jsonify(error='That Minecraft release/engine combination is unavailable. Refresh the version list.'), 400
+        except RuntimeError as error:
+            return jsonify(error=str(error)), 503
         
         server_name = request.form.get('server_name', 'My Server')
 
@@ -906,8 +1066,7 @@ def setup():
         config['server_type'] = server_type
         config['mc_version'] = version
         config['ram_gb'] = int(ram_allocation)
-        config['admin_user'] = admin_user
-        config['admin_pass'] = admin_pass
+        config['admin_user'] = g.panel_user['username']
         
         save_config(config)
         
@@ -925,6 +1084,7 @@ def setup():
         import threading
         SETUP_PROGRESS["percent"] = 5
         SETUP_PROGRESS["msg"] = "Downloading Minecraft Server Files"
+        SETUP_PROGRESS["status"] = "running"
         t = threading.Thread(target=setup_server_bg, args=(server_type, version, config))
         t.daemon = True
         t.start()
@@ -937,82 +1097,113 @@ def setup_server_bg(server_type, version, config):
     global SETUP_PROGRESS
     try:
 
-        # 1. Download Resolution Logic
-        jar_url = ""
-        installer_mode = False
-        
-        if server_type == "Vanilla":
-            # Traverse Mojang's version manifest
-            manifest = requests.get("https://launchermeta.mojang.com/mc/game/version_manifest.json").json()
-            for v in manifest['versions']:
-                if v['id'] == version:
-                    meta = requests.get(v['url']).json()
-                    jar_url = meta['downloads']['server']['url']
-                    break
-                    
-        elif server_type == "Paper":
-            builds = requests.get(f"https://api.papermc.io/v2/projects/paper/versions/{version}/builds").json()
-            latest_build = builds['builds'][-1]['build']
-            jar_url = f"https://api.papermc.io/v2/projects/paper/versions/{version}/builds/{latest_build}/downloads/paper-{version}-{latest_build}.jar"
-            
-        elif server_type == "Purpur":
-            jar_url = f"https://api.purpurmc.org/v2/purpur/{version}/latest/download"
-            
-        elif server_type == "Fabric":
-            # Fabric provides a pre-stitched server jar endpoint
-            jar_url = f"https://meta.fabricmc.net/v2/versions/loader/{version}/0.15.11/1.0.1/server/jar"
-            
-        elif server_type == "Forge":
-            # Forge requires an installer utility
-            jar_url = f"https://maven.minecraftforge.net/net/minecraftforge/forge/{version}/forge-{version}-installer.jar"
-            installer_mode = True
+        # Resolve published builds and required Java, never hard-code loader versions or filenames.
+        download = release_service.resolve_download(server_type, version)
+        jar_url = download['url']
+        installer_mode = server_type == 'Forge'
+        config['forge_version'] = download['forge_version']
+        config['forge_full_version'] = download['forge_full_version']
+        config['java_path'] = download['java_path']
 
         # 2. File Acquisition
         target_filename = "installer.jar" if installer_mode else "server.jar"
         target_path = os.path.join(SERVER_DIR, target_filename)
         
         if jar_url:
-            res = requests.get(jar_url, stream=True)
+            res = requests.get(jar_url, stream=True, headers=DOWNLOAD_HEADERS, timeout=(10, 180))
+            res.raise_for_status()
+            checksum = download.get('checksum')
+            digest = hashlib.new(checksum[0]) if checksum else None
             with open(target_path, 'wb') as f:
                 for chunk in res.iter_content(chunk_size=8192):
-                    f.write(chunk)
+                    if chunk:
+                        f.write(chunk)
+                        if digest:
+                            digest.update(chunk)
+            if digest and digest.hexdigest() != checksum[1]:
+                os.remove(target_path)
+                raise RuntimeError('The server download failed its checksum verification. Retry installation.')
+            if not zipfile.is_zipfile(target_path):
+                raise RuntimeError(f"Downloaded {target_filename} is not a valid Java archive.")
 
         # 3. Forge Installation Subprocess
         if installer_mode and server_type == "Forge":
             SETUP_PROGRESS["percent"] = 30
             SETUP_PROGRESS["msg"] = "Applying Correct Java Environment (Forge Installer)"
-            java_bin = get_java_version_path(version)
-            subprocess.run([java_bin, "-jar", target_filename, "--installServer"], cwd=SERVER_DIR)
+            java_bin = download['java_path']
+            installer_result = subprocess.run(
+                [java_bin, "-jar", target_filename, "--installServer"],
+                cwd=SERVER_DIR,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                timeout=900
+            )
+            if installer_result.returncode != 0:
+                installer_tail = (installer_result.stdout or '')[-1500:].strip()
+                raise RuntimeError(
+                    f"Forge installer exited with code {installer_result.returncode}. {installer_tail}"
+                )
+
+            launch_type, launch_target = discover_forge_launch_target(config)
+            config['launch_type'] = launch_type
+            config['launch_target'] = launch_target
             os.remove(target_path)
-            for file in os.listdir(SERVER_DIR):
-                if file.startswith("forge-") and file.endswith(".jar"):
-                    os.rename(os.path.join(SERVER_DIR, file), os.path.join(SERVER_DIR, "server.jar"))
+        else:
+            config['forge_version'] = ""
+            config['forge_full_version'] = ""
+            config['launch_type'] = 'jar'
+            config['launch_target'] = 'server.jar'
 
         SETUP_PROGRESS["percent"] = 50
         SETUP_PROGRESS["msg"] = "Applying Correct Java Environment"
         
         # 4. Finalize Configuration & First Boot
-        config['java_path'] = "" 
+        config['java_path'] = download['java_path']
         save_config(config)
+
+        # Refresh import/backup metadata now that Forge build and launch data are known.
+        engine_info_path = os.path.join(SERVER_DIR, "ServerEngineInfo")
+        with open(engine_info_path, "w") as f:
+            json.dump({
+                "server_name": config.get('server_name'),
+                "mc_version": version,
+                "server_type": server_type,
+                "ram_gb": config.get('ram_gb', 2),
+                "java_path": config.get('java_path'),
+                "forge_version": config.get('forge_version', ''),
+                "forge_full_version": config.get('forge_full_version', ''),
+                "launch_type": config.get('launch_type', ''),
+                "launch_target": config.get('launch_target', '')
+            }, f, indent=2)
         
         SETUP_PROGRESS["percent"] = 60
-        SETUP_PROGRESS["msg"] = "Creating First Server Start"
+        SETUP_PROGRESS["msg"] = "Building Server Files"
         
         # EULA
         with open(os.path.join(SERVER_DIR, "eula.txt"), "w") as f:
             f.write("eula=true\n")
             
-        java_bin = get_java_version_path(version)
-        cmd = [java_bin, "-Xmx1G", "-Xms1G", "-jar", "server.jar", "nogui"]
+        cmd = build_server_command(config, 1)
         
         process = subprocess.Popen(
             cmd, cwd=SERVER_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, 
             stderr=subprocess.STDOUT, universal_newlines=True
         )
         
+        boot_output = []
+        boot_ready = False
         for line in iter(process.stdout.readline, ''):
+            boot_output.append(line)
             if "Done (" in line or "For help, type" in line:
+                boot_ready = True
                 break
+
+        if not boot_ready:
+            raise RuntimeError(
+                f"Initial server boot exited with code {process.poll()}. "
+                f"{''.join(boot_output)[-1500:].strip()}"
+            )
                 
         # Wait a few seconds for world save, then stop
         import time
@@ -1035,12 +1226,23 @@ def setup_server_bg(server_type, version, config):
         
         SETUP_PROGRESS["percent"] = 100
         SETUP_PROGRESS["msg"] = "Done"
+        SETUP_PROGRESS["status"] = "done"
         
     except Exception as e:
+        config['is_setup'] = False
+        config['is_running'] = False
+        config['server_pid'] = None
+        config['target_state'] = 'Offline'
+        save_config(config)
         SETUP_PROGRESS["msg"] = f"Error: {e}"
+        SETUP_PROGRESS["status"] = "error"
 
 @app.route('/api/setup/progress')
 def api_setup_progress():
+    # Persisted completion wins over the in-memory snapshot, including the
+    # save-before-progress-update window and a panel restart after completion.
+    if load_config().get('is_setup'):
+        return jsonify(percent=100, msg='Done', status='done')
     return jsonify(SETUP_PROGRESS)
 
 @app.route('/')
@@ -1144,17 +1346,30 @@ def moderate_player(action):
     ip = payload.get('ip')
     reason = payload.get('reason', '')
     ban_type = payload.get('ban_type', 'both')
+    if action not in ('kick', 'ban', 'unban') or ban_type not in ('username', 'ip', 'both'):
+        return jsonify(error='Invalid moderation action.'), 400
+    if not isinstance(player_name, str) or not re.fullmatch(r'[A-Za-z0-9_]{1,16}', player_name):
+        return jsonify(error='Invalid player name.'), 400
+    if not isinstance(reason, str) or any(ord(c) < 32 for c in reason) or len(reason) > 500:
+        return jsonify(error='Invalid moderation reason.'), 400
+    if ip:
+        import ipaddress
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            return jsonify(error='Invalid player IP address.'), 400
     
     reason_str = f" {reason}" if reason else ""
     
     if not MINECRAFT_PROCESS or MINECRAFT_PROCESS.poll() is not None:
         return jsonify({"status": "error", "message": "Server offline"})
         
-    admin_user = load_config().get("admin_user", "Admin")
+    admin_user = g.panel_user['username']
     web_panel_source = f"Web Panel: {admin_user}"
     now_ts = datetime.utcnow().isoformat() + "Z"
     
     conn = sqlite3.connect(PLAYER_DB_FILE)
+    conn.execute("BEGIN IMMEDIATE")
     user = conn.execute("SELECT uuid, ban_type FROM users WHERE username = ?", (player_name,)).fetchone()
     uuid = user[0] if user else None
     stored_type = user[1] if user and user[1] else 'both'
@@ -1192,6 +1407,8 @@ def get_custom_assets_state():
         "favicon": os.path.exists(os.path.join(BRANDING_DIR, 'favicon.ico')),
         "bg": os.path.exists(os.path.join(BRANDING_DIR, 'bg.jpg'))
     }
+
+register_plugin_manager(app, SERVER_DIR, DATA_DIR, load_config, get_custom_assets_state)
 
 @app.route('/properties', methods=['GET', 'POST'])
 def properties():
@@ -1341,7 +1558,8 @@ def server_action(action):
         start_minecraft_server()
         return jsonify({"status": "restarted"})
 
-def create_backup(server_name, is_manual, is_initial=False):
+def create_backup(server_name, is_manual, is_initial=False, is_restore_backup=False):
+    server_name = secure_filename(str(server_name)) or 'server'
     import time
     from datetime import datetime
     
@@ -1351,7 +1569,12 @@ def create_backup(server_name, is_manual, is_initial=False):
     # Inject config and player history into the server dir temporarily
     temp_config = os.path.join(SERVER_DIR, "panel_config.json")
     if os.path.exists(CONFIG_FILE):
-        shutil.copy2(CONFIG_FILE, temp_config)
+        # Only engine metadata belongs in a portable Minecraft backup.
+        config = load_config()
+        portable_keys = ('server_name', 'mc_version', 'server_type', 'ram_gb', 'java_path',
+                         'forge_version', 'forge_full_version', 'launch_type', 'launch_target')
+        with open(temp_config, 'w', encoding='utf-8') as handle:
+            json.dump({key: config[key] for key in portable_keys if key in config}, handle, indent=4)
         
     temp_history = os.path.join(SERVER_DIR, "player_history.json")
     history_file = os.path.join(DATA_DIR, "player_history.json")
@@ -1363,6 +1586,8 @@ def create_backup(server_name, is_manual, is_initial=False):
     
     if is_initial:
         suffix = date_str + "_InitialBackup"
+    elif is_restore_backup:
+        suffix = date_str + "_RestoreBackup"
     elif is_manual:
         suffix = date_str + "_manual"
     else:
@@ -1440,23 +1665,52 @@ def api_create_backup():
     config = load_config()
     server_name = config.get('server_name', 'UnknownServer')
     
+    payload = request.get_json(silent=True) or {}
+    is_restore = payload.get('is_restore', False)
+
     try:
-        zip_path = create_backup(server_name, is_manual=True)
+        zip_path = create_backup(server_name, is_manual=True, is_restore_backup=is_restore)
         return jsonify({"status": "success", "file": os.path.basename(zip_path)})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/api/purge', methods=['POST'])
 def purge_server():
-    global MINECRAFT_PROCESS
-    # Enforce safe stop
-    if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
-        stop_minecraft_server()
-        time.sleep(2)
-        config = load_config()
-        if config.get('server_pid'):
-            try: os.kill(config.get('server_pid'), signal.SIGKILL)
-            except: pass
+    global MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
+    # stop_minecraft_server sends a command; it does not wait for process exit.
+    # Drain the old log reader before clearing records, or buffered logins can
+    # recreate players after the purge has reported success.
+    process = MINECRAFT_PROCESS
+    pid = load_config().get('server_pid')
+    try:
+        if process and process.poll() is None:
+            if not stop_minecraft_server():
+                return jsonify(error='Unable to stop the server. Stop it before purging.'), 409
+            process.wait(timeout=30)
+        elif pid and psutil.pid_exists(pid):
+            detached = psutil.Process(pid)
+            if not stop_minecraft_server():
+                return jsonify(error='Unable to stop the server. Stop it before purging.'), 409
+            detached.wait(timeout=30)
+    except (subprocess.TimeoutExpired, psutil.TimeoutExpired):
+        return jsonify(error='The server is still stopping. Wait until it is offline, then purge again.'), 409
+    except psutil.NoSuchProcess:
+        pass
+    except (OSError, psutil.Error):
+        app.logger.exception('Unable to stop server before purge')
+        return jsonify(error='Unable to verify server shutdown. Stop it before purging.'), 409
+    if MINECRAFT_LOG_THREAD:
+        MINECRAFT_LOG_THREAD.join(timeout=10)
+        if MINECRAFT_LOG_THREAD.is_alive():
+            return jsonify(error='Player tracking is still finishing. Wait a moment, then purge again.'), 409
+    MINECRAFT_PROCESS = None
+    MINECRAFT_LOG_THREAD = None
+
+    try:
+        clear_player_data()
+    except (sqlite3.Error, OSError):
+        app.logger.exception('Unable to clear player data during purge')
+        return jsonify(error='Unable to clear player history. Check data permissions and disk space, then retry purge.'), 500
             
     # Wipe core server files
     for filename in os.listdir(SERVER_DIR):
@@ -1481,11 +1735,20 @@ def purge_server():
     config['log_session_counter'] = 0
     config['mc_version'] = None
     config['server_type'] = None
+    config['forge_version'] = ''
+    config['forge_full_version'] = ''
+    config['launch_type'] = ''
+    config['launch_target'] = ''
     config['target_state'] = 'Offline'
     config['is_running'] = False
     config['server_pid'] = None
     config['log_session_counter'] = 0
+    config.pop('admin_pass', None)
+    config['admin_user'] = 'admin'
+    config['welcome_seen'] = False
     save_config(config)
+    security.store.reset()
+    session.clear()
     
     return jsonify({"status": "purged"})
 
@@ -1497,7 +1760,10 @@ def import_server():
     if 'import_backup_path' in request.form:
         backup_path = request.form['import_backup_path']
         # backup_path is passed as 'serverName/filename.zip'
-        full_backup_path = os.path.join(DATA_DIR, "backups", backup_path)
+        backup_root = os.path.realpath(os.path.join(DATA_DIR, 'backups'))
+        full_backup_path = os.path.realpath(os.path.join(backup_root, backup_path))
+        if os.path.commonpath([backup_root, full_backup_path]) != backup_root or not full_backup_path.lower().endswith('.zip'):
+            return jsonify(error='Invalid backup path.'), 400
         if not os.path.exists(full_backup_path):
             return jsonify({"error": "Backup file not found"}), 404
         shutil.copy2(full_backup_path, temp_zip)
@@ -1511,6 +1777,7 @@ def import_server():
             
         file.save(temp_zip)
     
+    validate_server_zip(temp_zip)
     needs_manual = False
     try:
         with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
@@ -1553,9 +1820,12 @@ def import_server():
             with open(imported_info, "r") as f:
                 engine_data = json.load(f)
                 if 'mc_version' in engine_data: config['mc_version'] = engine_data['mc_version']
-                if 'server_type' in engine_data: config['server_type'] = engine_data['server_type']
-                if 'ram_gb' in engine_data: config['ram_gb'] = engine_data['ram_gb']
-                if 'server_name' in engine_data: config['server_name'] = engine_data['server_name']
+                for key in [
+                    'server_type', 'ram_gb', 'server_name', 'java_path',
+                    'forge_version', 'forge_full_version', 'launch_type', 'launch_target'
+                ]:
+                    if key in engine_data:
+                        config[key] = engine_data[key]
         except: pass
     else:
         # Fallback to manual payload
@@ -1592,10 +1862,9 @@ def import_server():
     config['is_running'] = False
     config['server_pid'] = None
     
-    if request.form.get('admin_user') and request.form.get('admin_pass'):
-        config['admin_user'] = request.form.get('admin_user')
-        config['admin_pass'] = request.form.get('admin_pass')
-        session['logged_in'] = True
+    # A replacement is a new server scope, never an import of old accounts.
+    actor = security.store.reset(keep_actor=g.panel_user)
+    security.store.sign_in(session, actor)
         
     save_config(config)
     
@@ -1632,8 +1901,15 @@ def api_stats():
             ram = p.memory_info().rss / (1024 * 1024)
         except psutil.NoSuchProcess: pass
     else:
+        state_changed = False
         if target_state != "Offline":
             config['target_state'] = "Offline"
+            state_changed = True
+        if config.get('is_running') or config.get('server_pid'):
+            config['is_running'] = False
+            config['server_pid'] = None
+            state_changed = True
+        if state_changed:
             save_config(config)
             
     return jsonify({"status": status, "cpu": f"{cpu:.1f}%", "ram": f"{ram:.1f} MB", "tps": "20.0" if status == "Online" else "0.0"})
@@ -1653,9 +1929,26 @@ def get_console():
         return f"Error reading console: {str(e)}"
 
 
+@socketio.on('connect')
+def socket_connect(auth=None):
+    user = security.current_user()
+    if 'console.view' not in session_grants(user):
+        return False
+    with security.lock:
+        security.socket_clients[request.sid] = dict(session)
+
+@socketio.on('disconnect')
+def socket_disconnect(reason=None):
+    with security.lock:
+        security.socket_clients.pop(request.sid, None)
+
 @socketio.on('send_command')
 def handle_command(payload):
     global MINECRAFT_PROCESS
+    if 'console.command' not in session_grants(security.current_user()):
+        return {'error': 'You do not have permission to run console commands.'}
+    if not isinstance(payload, dict) or not isinstance(payload.get('command'), str):
+        return {'error': 'Invalid command.'}
     if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
         cmd_str = payload.get('command', '') + "\n"
         MINECRAFT_PROCESS.stdin.write(cmd_str)

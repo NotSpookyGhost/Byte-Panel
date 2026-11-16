@@ -1,0 +1,4 @@
+{% if can is defined %}
+{% if can('users.manage') %}<a href="/users" class="nav-link">Users</a>{% endif %}
+<a href="/account" class="nav-link">My account</a>
+{% endif %}

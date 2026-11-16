@@ -1,0 +1,26 @@
+<section class="card" id="smtp-settings">
+    <h2>Email notifications (SMTP)</h2>
+    <p class="accounts-hint">Invitations use your saved Panel Name for <code>{% raw %}{{servername}}{% endraw %}</code> in the welcome message and subject. Change it in the panel appearance settings above.</p>
+    <p class="accounts-hint">Invitations arrive as two emails: a welcome with the panel link and username, then a separate generated temporary password sent about 12 seconds later. Inbox arrival times may vary. Temporary passwords expire after 24 hours and must be changed before panel access. Chosen passwords are never emailed. Save these settings before testing.</p>
+    <p class="accounts-hint">Gmail: use <code>smtp.gmail.com</code>, port <code>587</code>, STARTTLS and your full email address as the username. This panel uses password authentication, so use a <a href="https://support.google.com/accounts/answer/185833" target="_blank" rel="noopener noreferrer">Google app password</a> with 2-Step Verification enabled, not your normal Google password.</p>
+    <div id="smtp-message" class="accounts-message" role="status" aria-live="polite" hidden></div>
+    <p id="smtp-state" class="accounts-hint" role="status" aria-live="polite">Loading saved SMTP settings...</p>
+    <form id="smtp-form">
+        <label class="accounts-check"><input name="enabled" type="checkbox">Enable SMTP delivery</label>
+        <label class="accounts-check"><input name="notify_new_users" type="checkbox" checked>Enable automatic account invitations (required to create users or send temporary passwords)</label>
+        <div class="accounts-grid">
+            <label>SMTP hostname<input name="host" placeholder="smtp.example.com" maxlength="255" autocomplete="off"></label>
+            <label>Port<input name="port" type="number" min="1" max="65535" value="587" required></label>
+            <label>Connection security<select name="security"><option value="starttls">STARTTLS (usually port 587)</option><option value="ssl">SSL/TLS (usually port 465)</option><option value="none">None — trusted local relay only</option></select></label>
+            <label>SMTP username<input name="username" autocomplete="off"></label>
+            <label>SMTP password / app password<input name="password" type="password" autocomplete="new-password"><small id="smtp-password-status">Leave blank to keep the saved password.</small></label>
+            <label class="accounts-check"><input name="clear_password" type="checkbox">Remove saved SMTP password</label>
+            <label>From email address<input name="from_email" type="email" placeholder="panel@example.com"></label>
+            <label>From display name<input name="from_name" value="Byte Panel"></label>
+            <label>Public panel URL<input name="panel_url" type="url" placeholder="https://panel.example.com"><small>The address users open to sign in. HTTPS is recommended.</small></label>
+        </div>
+        <p class="accounts-hint">Credentials are stored privately on the panel data volume and excluded from Minecraft backups. SMTP settings survive server resets. Only use an unencrypted relay on a trusted network, without authentication.</p>
+        <button class="btn btn-primary" type="submit">Save SMTP settings</button>
+    </form>
+    <form id="smtp-test-form" class="accounts-test"><label>Test recipient<input name="recipient" type="email" required placeholder="you@example.com"></label><button class="btn btn-outline" type="submit" aria-describedby="smtp-state" disabled>Send test email</button></form>
+</section>

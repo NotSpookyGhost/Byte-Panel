@@ -1,0 +1,23 @@
+.accounts-heading,.accounts-actions,.accounts-footer { display:flex; gap:12px; align-items:center; justify-content:space-between; }
+.accounts-footer { padding:20px; flex-wrap:wrap; }
+.accounts-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:18px; margin:20px 0; }
+.accounts-grid label,.accounts-password-form label,.accounts-test label { display:flex; flex-direction:column; gap:8px; }
+.accounts-grid small,.accounts-hint { color:var(--text-muted); font-size:.9rem; line-height:1.5; }
+.accounts-check { display:flex; align-items:center; gap:10px; padding:9px 0; }
+.accounts-check input[type="checkbox"] { width:18px; height:18px; flex-shrink:0; }
+.accounts-permissions { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:0 20px; }
+#user-permissions { border:1px solid var(--border); border-radius:8px; padding:16px; margin:18px 0; }
+.accounts-message,.accounts-notice { border:1px solid var(--accent); border-radius:8px; padding:16px; margin-bottom:20px; line-height:1.6; overflow-wrap:anywhere; }
+.accounts-message[data-error="true"] { border-color:#ef4444; }
+.accounts-message { color:var(--text-main, #f1f5f9); white-space:pre-wrap; }
+#smtp-settings button:disabled { opacity:.5; cursor:not-allowed; }
+.accounts-table-wrap { overflow-x:auto; }
+.accounts-table { width:100%; border-collapse:collapse; }
+.accounts-table th,.accounts-table td { text-align:left; padding:12px 10px; border-bottom:1px solid var(--border); }
+.accounts-table td button { margin:3px; }
+.accounts-password-form { display:flex; flex-direction:column; gap:16px; max-width:520px; }
+.accounts-test { display:flex; align-items:end; flex-wrap:wrap; gap:14px; margin-top:24px; padding-top:20px; border-top:1px solid var(--border); }
+.accounts-test label { flex:1; min-width:200px; }
+.accounts-actions { justify-content:flex-start; }
+.accounts-page .card h2,#smtp-settings h2 { margin-top:0; }
+[hidden] { display:none !important; }

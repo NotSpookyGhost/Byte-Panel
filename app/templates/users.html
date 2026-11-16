@@ -1,0 +1,28 @@
+{% extends 'accounts_base.html' %}
+{% block title %}Panel users{% endblock %}
+{% block content %}
+<header class="content-header"><h1>Panel users</h1><p>Control who can access this server and what they can do.</p></header>
+<div class="card accounts-notice">Only the original setup owner can Purge &amp; Reset; it removes every account and signs everyone out. Restoring or importing keeps the original owner and the acting user, with their existing roles and permissions, removes other users, and revokes old sessions. Normal container restarts keep accounts.</div>
+<div id="accounts-message" class="accounts-message" role="status" aria-live="polite" hidden></div>
+<section class="card">
+    <div class="accounts-heading"><h2>Accounts</h2><button class="btn btn-outline" id="new-user" type="button">New user</button></div>
+    <div class="accounts-table-wrap"><table class="accounts-table"><thead><tr><th>Username</th><th>Email</th><th>Access</th><th>Status</th><th>Actions</th></tr></thead><tbody id="users-list"><tr><td colspan="5">Loading accounts…</td></tr></tbody></table></div>
+</section>
+<section class="card">
+    <h2 id="user-form-title">Create user</h2>
+    <form id="user-form" data-user-id="" data-current-id="{{ current_user.id }}">
+        <div class="accounts-grid">
+            <label>Username<input name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.-]{3,32}" autocomplete="off"></label>
+            <label>Email address<input name="email" type="email" required maxlength="254" autocomplete="off"><small>Required for invitations. A generated temporary password is sent here.</small></label>
+            <label>Role<select name="role"><option value="custom">Custom permissions</option>{% if can_assign_admin %}<option value="admin">Administrator — all permissions except purge</option>{% endif %}</select></label>
+        </div>
+        <p class="accounts-hint">New users receive a welcome email with their panel link and username, followed by a separate temporary-password email about 12 seconds later. Keep this page open until both sends finish. The password expires after 24 hours and must be changed before using the panel. Enable SMTP delivery and automatic account invitations in Settings first. No password needs to be chosen here.</p>
+        <label class="accounts-check"><input name="enabled" type="checkbox" checked>Account enabled</label>
+        <fieldset id="user-permissions"><legend>Permissions</legend><p class="accounts-hint">No boxes selected = overview-only viewer. Management permissions include the matching view permission.</p>
+            <div class="accounts-permissions">{% for permission, label in permission_labels.items() %}{% if can(permission) %}<label class="accounts-check"><input type="checkbox" name="permission" value="{{ permission }}">{{ label }}</label>{% endif %}{% endfor %}</div>
+        </fieldset>
+        <p class="accounts-hint">Only grant access to people you trust. Plugins, console commands, backups and runtime settings can change or execute server code. Permission changes, disabling and deletion revoke existing sessions.</p>
+        <div class="accounts-actions"><button class="btn btn-primary" type="submit" id="save-user">Create user</button><button class="btn btn-outline" type="button" id="cancel-user">Cancel editing</button></div>
+    </form>
+</section>
+{% endblock %}

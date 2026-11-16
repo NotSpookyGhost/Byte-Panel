@@ -1,0 +1,14 @@
+Hello {{username}},
+
+Welcome to {{servername}}! Your panel account is ready. We're glad to have you on board!
+
+Panel: {{login_url}}
+Username: {{username}}
+
+Your temporary password will be sent in a second email shortly, approximately 12 seconds after this one. Delivery times can vary, so please check your spam folder if it doesn't arrive.
+
+Use that password to sign in, then choose your own password to get started. Panel access stays locked until you change your temporary password.
+
+If the password email doesn't arrive, ask your administrator to resend the invitation.
+
+This account belongs to this server only and is removed when the panel is reset.

@@ -28,6 +28,7 @@ RUN mkdir -p /data /app/templates /app/static /var/log/supervisor /data/logs /da
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
 COPY app/ /app/
+COPY templates/ /templates/
 COPY version.txt /version.txt
 
 # We only need pip for Flask-SocketIO now, which is pure Python and requires 0 compilation

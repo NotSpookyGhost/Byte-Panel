@@ -4,7 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MC-Panel - Setup</title>
+    <script src="{{ url_for('static', filename='password_policy.js', v=app_version) }}" defer></script>
+    <script src="{{ url_for('static', filename='setup_progress.js', v=app_version) }}" defer></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='password_policy.css', v=app_version) }}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         body {
@@ -31,6 +34,9 @@
         }
 
         .setup-container {
+            box-sizing: border-box;
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
             background-color: var(--bg-panel);
             padding: 40px;
             border-radius: 12px;
@@ -146,6 +152,7 @@
         .stage-btn-primary { background: var(--accent); color: white; border: none; }
         .stage-btn-primary:hover { background: var(--accent-hover); }
     </style>
+    {% include 'panel_access.html' %}
 </head>
 <body class="theme-{{ config.theme }}">
     <div class="overlay">
@@ -163,7 +170,9 @@
                 </div>
                 <div class="form-group">
                     <label for="admin_password"><span class="label-title">Panel Administrator Password</span></label>
-                    <input type="password" id="admin_password" name="admin_password" required>
+                    <input type="password" id="admin_password" name="admin_password" required minlength="12" maxlength="256" autocomplete="new-password" pattern="{{ password_pattern }}" title="{{ password_requirements }}" aria-describedby="owner-password-requirements" data-password-rules="{{ password_rules | tojson | forceescape }}" data-password-checklist="owner-password-requirements">
+                    {% with requirements_id='owner-password-requirements' %}{% include 'password_requirements.html' %}{% endwith %}
+                    <small>This becomes the owner account for this server.</small>
                 </div>
                 <button type="submit" class="stage-btn stage-btn-primary">Proceed</button>
             </form>
@@ -205,12 +214,13 @@
                 </div>
                 <div class="form-group">
                     <label for="versionSelect"><span class="label-title">Target Minecraft Version</span></label>
-                    <select id="versionSelect" name="version" required></select>
-                    <div class="info-note">The deployment engine will dynamically match and inject the verified Java JRE dependencies based on your selection.</div>
+                    <select id="versionSelect" name="version" required disabled><option>Loading stable releases…</option></select>
+                    <div class="info-note" id="version-status" role="status" aria-live="polite">Checking official release lists…</div>
+                    <button type="button" class="stage-btn" id="refresh-versions" onclick="loadMinecraftVersions()">Refresh versions</button>
                 </div>
                 <div class="form-group">
                     <label for="engineSelect"><span class="label-title">Server Software Platform</span></label>
-                    <select id="engineSelect" name="server_type" required></select>
+                    <select id="engineSelect" name="server_type" required disabled></select>
                 </div>
                 <div class="form-group">
                     <label for="ramSlider">
@@ -221,7 +231,7 @@
                     <div class="info-note">Detected System Maximum: <strong>{{ max_ram }} GB</strong>. Scale up allocation thresholds if initializing resource-heavy modpacks or larger player counts.</div>
                 </div>
                 <button type="button" class="stage-btn" onclick="goToStage2()">Back</button>
-                <button type="submit" class="stage-btn stage-btn-primary">Create Server</button>
+                <button type="submit" class="stage-btn stage-btn-primary" id="create-server-button" disabled>Create Server</button>
             </form>
         </div>
         
@@ -302,17 +312,35 @@
         
         function hideAll() { document.querySelectorAll('.stage').forEach(el => el.classList.remove('active')); }
         
-        function validateAndGoToStage2() {
+        async function validateAndGoToStage2() {
             admin_u = document.getElementById('admin_username').value;
             admin_p = document.getElementById('admin_password').value;
             if(!admin_u || !admin_p) {
                 alert("Please enter both username and password.");
                 return;
             }
-            goToStage2();
+            try {
+                const response = await fetch('/api/bootstrap', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username: admin_u, password: admin_p})
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Unable to create the owner account.');
+                admin_p = '';
+                document.getElementById('admin_password').value = '';
+                goToStage2();
+            } catch (error) { alert(error.message); }
         }
 
-        function goToStage1() { hideAll(); document.getElementById('stage-1').classList.add('active'); }
+        {% if current_user %}
+        document.addEventListener('DOMContentLoaded', () => goToStage2());
+        {% endif %}
+
+        function goToStage1() {
+            // Once claimed, the owner is managed through My account, not recreated.
+            if (admin_u || {{ 'true' if current_user else 'false' }}) { goToStage2(); return; }
+            hideAll(); document.getElementById('stage-1').classList.add('active');
+        }
         
         function goToStage2() { hideAll(); document.getElementById('stage-2').classList.add('active'); setupMode = null; pendingZipFile = null; }
         
@@ -349,6 +377,10 @@
         function goToStage3New() { hideAll(); document.getElementById('stage-3').classList.add('active'); setupMode = 'new'; }
         
         function executeNewServer() {
+            if (!mcData[versionSelect.value]?.includes(engineSelect.value)) {
+                alert('Wait for the version list to load, then select an available engine.');
+                return;
+            }
             setupMode = 'new';
             executeFinalStage();
         }
@@ -366,43 +398,36 @@
             executeFinalStage();
         }
         
-        function executeFinalStage() {
+        async function executeFinalStage() {
             hideAll(); document.getElementById('stage-4').classList.add('active');
             
             if (setupMode === 'new') {
                 document.getElementById('progress-title').innerText = "Building Server";
                 document.getElementById('progress-msg').innerText = "Downloading Minecraft Server Files";
                 
-                let p = 0;
                 document.getElementById('progress-fill').style.transition = 'width 0.5s linear';
                 document.getElementById('progress-fill').style.width = '0%';
+                document.getElementById('progress-fill').style.backgroundColor = '';
+                document.getElementById('progress-percent').innerText = '0%';
                 
                 let formData = new FormData();
                 formData.append('server_name', document.getElementById('serverName').value);
                 formData.append('version', document.getElementById('versionSelect').value);
                 formData.append('server_type', document.getElementById('engineSelect').value);
                 formData.append('ram_allocation', document.getElementById('ramSlider').value);
-                formData.append('admin_username', admin_u);
-                formData.append('admin_password', admin_p);
                 
-                fetch('/setup', { method: 'POST', body: formData }).then(res => {
-                    // Start polling
-                });
+                try {
+                    const response = await fetch('/setup', { method: 'POST', body: formData });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || 'Server setup could not start.');
+                } catch (error) {
+                    document.getElementById('progress-title').innerText = 'Server Build Failed';
+                    await showModal('Server Build Failed', error.message);
+                    goToStage3New();
+                    return;
+                }
                 
-                // Poll progress
-                let pollInterval = setInterval(() => {
-                    fetch('/api/setup/progress').then(r => r.json()).then(data => {
-                        if (data.msg) {
-                            document.getElementById('progress-msg').innerText = data.msg;
-                            document.getElementById('progress-fill').style.width = data.percent + '%';
-                            document.getElementById('progress-percent').innerText = Math.round(data.percent) + '%';
-                        }
-                        if (data.percent >= 100) {
-                            clearInterval(pollInterval);
-                            location.href = "/overview";
-                        }
-                    });
-                }, 1000);
+                startSetupProgress();
                 
             } else if (setupMode === 'import' || setupMode === 'import_backup') {
                 document.getElementById('progress-title').innerText = "Importing Server";
@@ -414,8 +439,6 @@
                 } else {
                     formData.append('import_backup_path', pendingZipFile);
                 }
-                formData.append('admin_user', admin_u);
-                formData.append('admin_pass', admin_p);
                 
                 let xhr = new XMLHttpRequest();
                 xhr.open('POST', '/api/import', true);
@@ -435,6 +458,11 @@
                     if (xhr.status === 200) {
                         let data = JSON.parse(xhr.responseText);
                         if (data.missing_engine_info) {
+                            if (!Object.keys(mcData).length && !await loadMinecraftVersions()) {
+                                alert('Unable to load Minecraft versions. Check connectivity before configuring this import.');
+                                goToStage2b();
+                                return;
+                            }
                             let result = await showModal("Missing Engine Data", "The imported ZIP does not contain a ServerEngineInfo file. Please manually configure the environment:", false, false, [
                                 { label: "Target Version", id: "manual_mc_version", type: "select", options: Object.keys(mcData) },
                                 { label: "Server Platform", id: "manual_server_type", type: "select", options: ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"] },
@@ -464,51 +492,63 @@
             }
         }
         
-        const mcData = {
-            "26.2": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "26.1.2": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "26.1.1": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "26.1": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.21.11": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.21.5": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.21.4": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.21.3": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.21.1": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.20.6": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.20.4": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.20.2": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.20.1": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.19.4": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.18.2": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.17.1": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.16.5": ["Vanilla", "Paper", "Purpur", "Fabric", "Forge"],
-            "1.12.2": ["Vanilla", "Paper", "Fabric", "Forge"],
-            "1.8.8": ["Vanilla", "Paper", "Forge"]
-        };
+        let mcData = {};
+        let loadingVersions = false;
         const versionSelect = document.getElementById('versionSelect');
         const engineSelect = document.getElementById('engineSelect');
-        for (const version in mcData) {
-            let opt = document.createElement('option');
-            opt.value = version;
-            opt.innerHTML = version;
-            versionSelect.appendChild(opt);
-        }
         versionSelect.addEventListener('change', function() {
-            const availableEngines = mcData[this.value];
+            const availableEngines = mcData[this.value] || [];
             const previousSelection = engineSelect.value;
-            engineSelect.innerHTML = '';
+            engineSelect.replaceChildren();
             availableEngines.forEach(engine => {
                 let opt = document.createElement('option');
                 opt.value = engine;
-                opt.innerHTML = engine;
+                opt.textContent = engine;
                 engineSelect.appendChild(opt);
             });
             if (availableEngines.includes(previousSelection)) engineSelect.value = previousSelection;
-            else engineSelect.value = "Vanilla";
+            else engineSelect.value = availableEngines[0] || '';
+            engineSelect.disabled = availableEngines.length === 0;
+            document.getElementById('create-server-button').disabled = availableEngines.length === 0;
         });
-        versionSelect.value = "26.2";
-        versionSelect.dispatchEvent(new Event('change'));
-        engineSelect.value = "Vanilla";
+        async function loadMinecraftVersions() {
+            if (loadingVersions) return false;
+            loadingVersions = true;
+            const status = document.getElementById('version-status');
+            const retry = document.getElementById('refresh-versions');
+            const selected = versionSelect.value;
+            retry.disabled = true;
+            versionSelect.disabled = true;
+            engineSelect.disabled = true;
+            document.getElementById('create-server-button').disabled = true;
+            status.textContent = 'Checking official stable release lists…';
+            try {
+                const response = await fetch('/api/minecraft/versions');
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Unable to load versions.');
+                if (!data.versions?.length) throw new Error('No releases were returned. Retry shortly.');
+                mcData = {};
+                versionSelect.replaceChildren();
+                data.versions.forEach(item => {
+                    mcData[item.version] = item.engines;
+                    const option = document.createElement('option');
+                    option.value = item.version;
+                    option.textContent = item.version + (item.version === data.latest ? ' (latest stable)' : '');
+                    versionSelect.appendChild(option);
+                });
+                versionSelect.value = mcData[selected] ? selected : data.latest;
+                versionSelect.disabled = false;
+                versionSelect.dispatchEvent(new Event('change'));
+                status.textContent = `Latest stable: ${data.latest}. Lists refresh every 5 minutes; snapshots are excluded. ` +
+                    'Engine builds and Java requirements are checked again during installation. ' + (data.warnings || []).join(' ');
+                return true;
+            } catch (error) {
+                mcData = {};
+                status.textContent = error.message + ' Check panel internet access, then click Refresh versions.';
+                return false;
+            } finally { loadingVersions = false; retry.disabled = false; }
+        }
+        loadMinecraftVersions();
     </script>
     <div style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
         <div>Byte Panel {{ app_version }}</div>

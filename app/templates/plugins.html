@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plugins - {{ config.panel_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='plugins.css') }}">
+    <link rel="icon" href="{{ '/branding-assets/favicon.ico' if has_custom.favicon else url_for('static', filename='bytedev_logo.png') }}">
+    <script src="{{ url_for('static', filename='plugin_search.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='plugins.js') }}" defer></script>
+    {% include 'panel_access.html' %}
+</head>
+<body class="theme-{{ config.theme }} plugins-page">
+    <aside class="sidebar">
+        <nav class="nav-group" aria-label="Panel navigation">
+            <div class="sidebar-header">
+                <img class="sidebar-logo" src="{{ '/branding-assets/logo.png' if has_custom.logo else url_for('static', filename='bytedev_logo.png') }}" alt="Panel logo">
+                <h2>{{ config.panel_name }}</h2>
+            </div>
+            <a href="/overview">Overview</a>
+            {% if can is not defined or can('console.view') %}<a href="/console">Console</a>{% endif %}
+            {% if can is not defined or can('logs.view') %}<a href="/logs">Logs</a>{% endif %}
+            {% if can is not defined or can('players.view') %}<a href="/players">Players</a>{% endif %}
+            {% include 'plugins_nav.html' %}
+            {% if can is not defined or can('properties.manage') %}<a href="/properties">Properties</a>{% endif %}
+            {% if can is not defined or (can('backups.create') or can('backups.restore')) %}<a href="/backups">Backups</a>{% endif %}
+            {% if can is not defined or can('settings.manage') %}<a href="/settings">Settings</a>{% endif %}
+                {% include 'accounts_nav.html' %}
+        </nav>
+        <div class="plugins-user">
+            <span>{{ current_user.username if current_user else config.admin_user }}</span>
+            <a class="btn btn-outline" href="/logout">Logout</a>
+        </div>
+    </aside>
+    <main class="main-layout" id="plugin-manager" data-csrf-token="{{ plugin_csrf_token }}">
+        <header class="top-action-bar">
+            <div><strong>Plugins</strong> <span class="plugins-engine">{{ config.server_type }} {{ config.mc_version }}</span></div>
+            {% if can is not defined or can('console.view') %}<a href="/console" class="btn btn-outline">Open console</a>{% endif %}
+        </header>
+        <div class="main-content">
+            <section class="card plugins-upload" aria-labelledby="upload-title">
+                <div>
+                    <h1 id="upload-title">Plugins &amp; configs</h1>
+                    <p>Upload plugin JARs to the plugins folder, then start or restart your server to generate their config folders.</p>
+                    <p>Stop the server before editing configs or deleting plugins. Restart to apply uploads, edits and deletions. Deleting a JAR keeps its config folders and saves a recoverable backup.</p>
+                </div>
+                <form data-permission="plugins.manage" id="plugin-upload-form">
+                    <label for="plugin-upload">Choose plugin JARs or config files</label>
+                    <div class="plugins-upload-controls">
+                        <input class="plugin-interactive" id="plugin-upload" type="file" multiple required
+                            accept=".jar,.yml,.yaml,.json,.toml,.properties,.conf,.cfg,.ini,.txt,.xml,.csv,.md,.log">
+                        <button class="btn btn-primary plugin-interactive" type="submit" id="upload-button">Upload files</button>
+                    </div>
+                    <p class="plugins-hint">Up to 64 MiB per JAR or 1 MiB per text config. JARs go in the root folder; configs go in the folder you have open.</p>
+                </form>
+            </section>
+            <div id="plugins-message" class="plugins-message" role="status" aria-live="polite" hidden></div>
+            <div class="plugins-workspace">
+                <section class="card plugins-browser" aria-label="Plugin files">
+                    <div class="plugins-toolbar">
+                        <h2>Files</h2>
+                        <button type="button" id="refresh-files" class="btn btn-outline plugin-interactive">Refresh</button>
+                    </div>
+                    <nav id="plugin-breadcrumbs" class="plugins-breadcrumbs" aria-label="Plugin folder"></nav>
+                    <p id="plugin-list-status" class="plugins-hint">Loading files...</p>
+                    <div class="plugins-table-scroll">
+                        <table class="plugins-file-table">
+                            <thead><tr><th scope="col">Name</th><th scope="col">Size</th><th scope="col">Actions</th></tr></thead>
+                            <tbody id="plugin-file-list"></tbody>
+                        </table>
+                    </div>
+                </section>
+                <section class="card plugins-editor" aria-labelledby="editor-title">
+                    <div class="plugins-toolbar">
+                        <h2 id="editor-title">Config editor</h2>
+                        <span id="editor-state" class="plugins-hint">No file selected</span>
+                    </div>
+                    <p id="editor-path" class="plugins-editor-path">Select a text config from the file list.</p>
+                    <div class="config-search" role="search" aria-label="Search open config">
+                        <label for="config-search">Find in config</label>
+                        <div class="config-search-controls">
+                            <input id="config-search" type="search" placeholder="Search this file..." autocomplete="off" spellcheck="false" disabled aria-describedby="search-status search-help">
+                            <button id="search-previous" class="btn btn-outline" type="button" disabled title="Previous match (Shift+F3)">Previous</button>
+                            <button id="search-next" class="btn btn-outline" type="button" disabled title="Next match (F3)">Next</button>
+                        </div>
+                        <div class="config-search-options">
+                            <label><input id="search-match-case" type="checkbox" disabled> Match case</label>
+                            <span id="search-status" class="plugins-hint" role="status" aria-live="polite">Open a config to search.</span>
+                        </div>
+                        <p id="search-help" class="plugins-hint">Ctrl/Cmd+F in the editor to find. Enter in search or F3 for next; hold Shift for previous.</p>
+                    </div>
+                    <label for="plugin-content" class="plugins-hint">File contents</label>
+                    <textarea id="plugin-content" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" disabled
+                        placeholder="Open a plugin folder and select a .yml, .json, .properties or other text config."></textarea>
+                    <div class="plugins-editor-actions">
+                        <button id="reload-config" class="btn btn-outline" type="button" disabled>Reload file</button>
+                        <button data-permission="plugins.manage" id="save-config" class="btn btn-primary" type="button" disabled>Save changes</button>
+                    </div>
+                    <p class="plugins-hint">Previous versions are saved in <code>/data/plugin-config-backups</code>. Configs are saved as plain text; check their syntax before restarting.</p>
+                </section>
+            </div>
+            <footer class="plugins-version">Byte Panel {{ app_version }}</footer>
+        </div>
+    </main>
+</body>
+</html>

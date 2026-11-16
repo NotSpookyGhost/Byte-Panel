@@ -1,0 +1,5 @@
+{% if panel_csrf is defined %}
+<meta name="panel-csrf" content="{{ panel_csrf }}">
+<script id="panel-permissions" type="application/json">{{ panel_permissions | tojson }}</script>
+<script src="{{ url_for('static', filename='panel_access.js') }}"></script>
+{% endif %}

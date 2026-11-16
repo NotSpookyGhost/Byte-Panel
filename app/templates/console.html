@@ -9,6 +9,7 @@
     {% else %}
     <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
     {% endif %}
+    {% include 'panel_access.html' %}
 </head>
 
 <body class="theme-{{ config.theme }}">
@@ -23,14 +24,16 @@
                 <h2>{{ config.panel_name }}</h2>
             </div>
             <a href="/overview">Overview</a>
-            <a href="/console" class="active">Console</a>
-            <a href="/logs">Logs</a>
-            <a href="/players">Players</a>
-            <a href="/properties">Properties</a>            <a href="/backups">Backups</a>
-            <a href="/settings">Settings</a>
+            {% if can is not defined or can('console.view') %}<a href="/console" class="active">Console</a>{% endif %}
+            {% if can is not defined or can('logs.view') %}<a href="/logs">Logs</a>{% endif %}
+            {% if can is not defined or can('players.view') %}<a href="/players">Players</a>{% endif %}
+            {% include 'plugins_nav.html' %}
+            {% if can is not defined or can('properties.manage') %}<a href="/properties">Properties</a>{% endif %}            {% if can is not defined or (can('backups.create') or can('backups.restore')) %}<a href="/backups">Backups</a>{% endif %}
+            {% if can is not defined or can('settings.manage') %}<a href="/settings">Settings</a>{% endif %}
+                {% include 'accounts_nav.html' %}
         </div>
         <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
-            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ config.admin_user }}</div>
+            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ current_user.username if current_user else config.admin_user }}</div>
             <form action="/logout" method="GET" style="margin: 0;">
                 <button type="submit" class="btn"
                     style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
@@ -42,9 +45,9 @@
             <div>Server Console | Status: <strong id="top-status" style="color: var(--text-muted);">Offline</strong>
             </div>
             <div style="display:flex; gap:10px;">
-                <button class="btn btn-start" onclick="triggerAction('start')">Start</button>
-                <button class="btn btn-stop" onclick="triggerAction('stop')">Stop</button>
-                <button class="btn btn-restart" onclick="triggerAction('restart')">Restart</button>
+                <button data-permission="server.control" class="btn btn-start" onclick="triggerAction('start')">Start</button>
+                <button data-permission="server.control" class="btn btn-stop" onclick="triggerAction('stop')">Stop</button>
+                <button data-permission="server.control" class="btn btn-restart" onclick="triggerAction('restart')">Restart</button>
             </div>
         </div>
         <div class="console-container">
@@ -55,10 +58,10 @@
             </div>
             
             <div style="display: flex; gap: 10px; margin-top: 15px; max-width: 600px; margin-left: auto; margin-right: auto;">
-                <input type="text" id="commandInput" placeholder="Enter a server command (e.g. say Hello World)" 
+                <input data-permission="console.command" type="text" id="commandInput" placeholder="Enter a server command (e.g. say Hello World)"
                     style="flex-grow: 1; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-main);"
                     onkeydown="if(event.key === 'Enter') sendCommand()">
-                <button class="btn btn-start" onclick="sendCommand()">Send</button>
+                <button data-permission="console.command" class="btn btn-start" onclick="sendCommand()">Send</button>
             </div>
         </div>
 
