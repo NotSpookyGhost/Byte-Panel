@@ -14,6 +14,7 @@ import sqlite3
 import hashlib
 import urllib.request
 from contextlib import closing
+from functools import wraps
 import geoip2.database
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory, send_file, make_response, g, abort
 from flask_socketio import SocketIO, emit
@@ -23,6 +24,7 @@ from plugin_manager import register_plugin_manager
 from panel_security import PanelSecurity
 from panel_accounts import grants, session_grants
 from minecraft_releases import MinecraftReleases, DOWNLOAD_HEADERS, java_path
+from server_backups import ServerBackups, BackupBusy, backup_error
 
 release_service = MinecraftReleases()
 
@@ -188,6 +190,19 @@ def save_config(config):
         json.dump(config, f, indent=4)
 
 security = PanelSecurity(app, DATA_DIR, load_config, save_config, lambda: get_custom_assets_state())
+server_backups = ServerBackups(DATA_DIR, SERVER_DIR, load_config, app.logger)
+
+
+def exclusive_server_files(function):
+    """Do not replace server data while a backup is reading it (or vice versa)."""
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        try:
+            with server_backups.exclusive():
+                return function(*args, **kwargs)
+        except BackupBusy as error:
+            return jsonify(status='error', error=str(error), message=str(error)), 409
+    return guarded
 
 def load_player_history():
     file_path = os.path.join(DATA_DIR, "player_history.json")
@@ -832,6 +847,7 @@ def api_delete_backup():
     return jsonify({"error": "Failed to delete"}), 400
 
 @app.route('/api/backup/restore', methods=['POST'])
+@exclusive_server_files
 def api_restore_backup():
     import zipfile
     import time
@@ -1559,71 +1575,7 @@ def server_action(action):
         return jsonify({"status": "restarted"})
 
 def create_backup(server_name, is_manual, is_initial=False, is_restore_backup=False):
-    server_name = secure_filename(str(server_name)) or 'server'
-    import time
-    from datetime import datetime
-    
-    server_backups_dir = os.path.join(DATA_DIR, "backups", server_name)
-    os.makedirs(server_backups_dir, exist_ok=True)
-    
-    # Inject config and player history into the server dir temporarily
-    temp_config = os.path.join(SERVER_DIR, "panel_config.json")
-    if os.path.exists(CONFIG_FILE):
-        # Only engine metadata belongs in a portable Minecraft backup.
-        config = load_config()
-        portable_keys = ('server_name', 'mc_version', 'server_type', 'ram_gb', 'java_path',
-                         'forge_version', 'forge_full_version', 'launch_type', 'launch_target')
-        with open(temp_config, 'w', encoding='utf-8') as handle:
-            json.dump({key: config[key] for key in portable_keys if key in config}, handle, indent=4)
-        
-    temp_history = os.path.join(SERVER_DIR, "player_history.json")
-    history_file = os.path.join(DATA_DIR, "player_history.json")
-    if os.path.exists(history_file):
-        shutil.copy2(history_file, temp_history)
-        
-    now = datetime.now()
-    date_str = now.strftime("%Y%m%d%H%M%S")
-    
-    if is_initial:
-        suffix = date_str + "_InitialBackup"
-    elif is_restore_backup:
-        suffix = date_str + "_RestoreBackup"
-    elif is_manual:
-        suffix = date_str + "_manual"
-    else:
-        suffix = date_str + "_auto"
-        
-    backup_filename = f"{server_name}_{suffix}"
-    backup_path = os.path.join(server_backups_dir, backup_filename)
-    
-    shutil.make_archive(backup_path, 'zip', SERVER_DIR)
-    
-    if os.path.exists(temp_config):
-        os.remove(temp_config)
-    if os.path.exists(temp_history):
-        os.remove(temp_history)
-        
-    # Prune automated backups if needed
-    if not is_manual and not is_initial:
-        config = load_config()
-        max_backups = int(config.get('auto_backup_keep', 5))
-        
-        auto_backups = []
-        for f in os.listdir(server_backups_dir):
-            if f.endswith('_auto.zip'):
-                auto_backups.append(os.path.join(server_backups_dir, f))
-                
-        # Sort by modified time
-        auto_backups.sort(key=os.path.getmtime)
-        
-        while len(auto_backups) > max_backups:
-            oldest = auto_backups.pop(0)
-            try:
-                os.remove(oldest)
-            except:
-                pass
-                
-    return f"{backup_path}.zip"
+    return server_backups.create(server_name, is_manual, is_initial, is_restore_backup)
 
 def backup_scheduler():
     import time
@@ -1632,7 +1584,7 @@ def backup_scheduler():
     while True:
         try:
             config = load_config()
-            if config.get('auto_backup_enabled') and config.get('server_name'):
+            if config.get('is_setup') and config.get('auto_backup_enabled') and config.get('server_name'):
                 freq = config.get('auto_backup_freq', 'weekly')
                 last_run = config.get('last_auto_backup', 0)
                 now = time.time()
@@ -1653,10 +1605,13 @@ def backup_scheduler():
                     
                 if should_run:
                     create_backup(config.get('server_name'), is_manual=False)
+                    config = load_config()
                     config['last_auto_backup'] = now
                     save_config(config)
+        except BackupBusy:
+            pass  # Retry next minute; do not change the last successful backup time.
         except Exception as e:
-            print(f"[BACKUP SCHEDULER ERROR] {e}")
+            app.logger.exception('Automatic server backup failed: %s', backup_error(e))
             
         time.sleep(60)
 
@@ -1666,15 +1621,31 @@ def api_create_backup():
     server_name = config.get('server_name', 'UnknownServer')
     
     payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify(status='error', message='Invalid backup request.'), 400
     is_restore = payload.get('is_restore', False)
 
     try:
+        if payload.get('background') is True:
+            return jsonify(server_backups.start(security.store.scope(), is_restore)), 202
         zip_path = create_backup(server_name, is_manual=True, is_restore_backup=is_restore)
         return jsonify({"status": "success", "file": os.path.basename(zip_path)})
+    except BackupBusy as e:
+        return jsonify(status='error', message=str(e)), 409
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+        app.logger.exception('Manual server backup failed')
+        return jsonify(status='error', message=backup_error(e)), 500
+
+
+@app.route('/api/backup/status/<job_id>')
+def api_backup_status(job_id):
+    job = server_backups.status(job_id, security.store.scope())
+    if job is None:
+        return jsonify(status='error', message='Backup progress is no longer available. The panel may have restarted. Check the backup list before retrying.'), 404
+    return jsonify(job)
 
 @app.route('/api/purge', methods=['POST'])
+@exclusive_server_files
 def purge_server():
     global MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
     # stop_minecraft_server sends a command; it does not wait for process exit.
@@ -1753,6 +1724,7 @@ def purge_server():
     return jsonify({"status": "purged"})
 
 @app.route('/api/import', methods=['POST'])
+@exclusive_server_files
 def import_server():
     global MINECRAFT_PROCESS
     temp_zip = os.path.join(DATA_DIR, "temp_import.zip")

@@ -1205,6 +1205,107 @@ class AccountIntegrationTests(unittest.TestCase):
                     checked = subprocess.run(['node'], input=check_js, capture_output=True, text=True, encoding='utf-8')
                     self.assertEqual(checked.returncode, 0, checked.stderr)
 
+    def test_background_backup_creation_and_status_require_create_permission(self):
+        for name, permissions in (('creator', ['backups.create']), ('restorer', ['backups.restore']),
+                                  ('reader', [])):
+            client = self.client_for(self.create(name, permissions))
+            allowed = name == 'creator'
+            job = dict(job_id='a' * 32, status='running', message='Preparing...')
+            with patch.object(self.module.server_backups, 'start', return_value=job) as start, \
+                 patch.object(self.module.server_backups, 'status', return_value=job) as status:
+                result = client.post('/api/backup/create', json={'background': True}, headers=self.headers(client))
+                self.assertEqual(result.status_code, 202 if allowed else 403)
+                self.assertEqual(start.call_count, int(allowed))
+                result = client.get('/api/backup/status/' + 'a' * 32)
+                self.assertEqual(result.status_code, 200 if allowed else 403)
+                self.assertEqual(status.call_count, int(allowed))
+                self.assertEqual(client.post('/api/backup/create', json={'background': True}).status_code, 403)
+        self.assertEqual(self.app.test_client().get('/api/backup/status/' + 'a' * 32).status_code, 401)
+        self.assertEqual(self.client.get('/api/backup/status/unknown').status_code, 404)
+        self.assertEqual(self.client.post('/api/backup/create', json=['invalid'], headers=self.headers()).status_code, 400)
+
+    def test_background_backup_endpoint_creates_verified_zip_with_old_file_date(self):
+        marker = self.root / 'old.dat'
+        marker.write_bytes(b'old imported file')
+        os.utime(marker, (0, 0))
+        finished = self.module.threading.Event()
+        update = self.module.server_backups._update
+        def record(job_id, **values):
+            update(job_id, **values)
+            if values.get('status') in ('success', 'error'):
+                finished.set()
+        with patch.object(self.module.server_backups, '_update', side_effect=record):
+            result = self.client.post('/api/backup/create', json={'background': True}, headers=self.headers())
+            self.assertEqual(result.status_code, 202)
+            self.assertTrue(finished.wait(5), 'Backup worker did not complete')
+        response = self.client.get('/api/backup/status/' + result.json['job_id'])
+        self.assertEqual(response.json['status'], 'success', response.json)
+        self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        archive_path = self.data / 'backups' / 'Test_Server' / response.json['file']
+        with zipfile.ZipFile(archive_path) as archive:
+            self.assertEqual(archive.read('old.dat'), b'old imported file')
+            self.assertEqual(archive.getinfo('old.dat').date_time[0], 1980)
+            self.assertIsNone(archive.testzip())
+        self.assertFalse((self.root / 'panel_config.json').exists())
+        # Job status must not leak into a reset/replaced server's account scope.
+        with patch.object(self.store, 'scope', return_value='new-scope'):
+            self.assertEqual(self.module.server_backups.status(result.json['job_id'], self.store.scope()), None)
+
+    def test_backup_errors_return_json_and_log_the_actual_failure(self):
+        import errno
+        with patch.object(self.module, 'create_backup', side_effect=OSError(errno.ENOSPC, 'disk full')), \
+             self.assertLogs(self.app.logger, level='ERROR'):
+            response = self.client.post('/api/backup/create', headers=self.headers())
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json['status'], 'error')
+        self.assertIn('free space', response.json['message'])
+
+    def test_active_backups_block_restore_import_purge_and_duplicate_creation(self):
+        marker = self.root / 'keep.txt'
+        marker.write_text('must remain')
+        scope = self.store.scope()
+        with self.module.server_backups.exclusive():
+            for path in ('/api/backup/restore', '/api/import', '/api/purge', '/api/backup/create'):
+                response = self.client.post(path, json={'background': True}, headers=self.headers())
+                self.assertEqual(response.status_code, 409, (path, response.json))
+                self.assertIn('already running', response.json['message'])
+            self.assertEqual(marker.read_text(), 'must remain')
+            self.assertEqual(self.store.scope(), scope)
+        self.assertEqual(self.client.post('/api/backup/create', headers=self.headers()).status_code, 200)
+
+    def test_backup_scheduler_only_runs_after_setup_and_marks_success(self):
+        from server_backups import BackupBusy
+        class EndLoop(Exception):
+            pass
+        self.config.update(auto_backup_enabled=True, auto_backup_freq='hourly', last_auto_backup=0)
+        self.module.save_config(self.config)
+        for error in (BackupBusy('busy'), OSError('storage failed')):
+            with patch.object(self.module, 'create_backup', side_effect=error), \
+                 patch.object(self.app.logger, 'exception'), \
+                 patch('time.sleep', side_effect=EndLoop):
+                with self.assertRaises(EndLoop):
+                    self.module.backup_scheduler()
+            self.assertEqual(self.module.load_config()['last_auto_backup'], 0)
+        with patch.object(self.module, 'create_backup', return_value='backup.zip') as create, \
+             patch('time.sleep', side_effect=EndLoop):
+            with self.assertRaises(EndLoop):
+                self.module.backup_scheduler()
+            create.assert_called_once_with('Test Server', is_manual=False)
+        self.assertGreater(self.module.load_config()['last_auto_backup'], 0)
+        self.config.update(is_setup=False, last_auto_backup=0)
+        self.module.save_config(self.config)
+        with patch.object(self.module, 'create_backup') as create, patch('time.sleep', side_effect=EndLoop):
+            with self.assertRaises(EndLoop):
+                self.module.backup_scheduler()
+            create.assert_not_called()
+
+    def test_partial_archives_are_not_listed_or_downloadable(self):
+        directory = self.data / 'backups' / 'Partial_Test'
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'unfinished.zip.partial').write_bytes(b'not completed')
+        self.assertNotIn('Partial_Test', self.client.get('/api/backups/list').json['backups'])
+        self.assertEqual(self.client.get('/api/backup/download/Partial_Test/unfinished.zip.partial').status_code, 400)
+
     def test_restore_and_import_permissions_cannot_bypass_each_other(self):
         creator = self.client_for(self.create('creator', ['backups.create']))
         importer = self.client_for(self.create('importer', ['server.import']))

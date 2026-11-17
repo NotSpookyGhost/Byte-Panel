@@ -27,6 +27,7 @@ ROUTE_PERMISSIONS = {
     'api_download_backup': 'backups.create', 'api_delete_backup': 'backups.create',
     'api_restore_backup': 'backups.restore', 'rename_backup': 'backups.create',
     'api_create_backup': 'backups.create',
+    'api_backup_status': 'backups.create',
     'plugins.page': 'plugins.view', 'plugins.list_files': 'plugins.view',
     'plugins.config_file': 'plugins.view', 'plugins.upload': 'plugins.manage',
     'plugins.download': 'plugins.view', 'plugins.delete_plugin': 'plugins.manage',

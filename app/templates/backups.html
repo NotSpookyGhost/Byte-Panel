@@ -9,6 +9,7 @@
     <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
     {% endif %}
     <style>
+        @keyframes backup-pulse { 50% { opacity: 0.35; } }
         .roster-table {
             width: 100%;
             border-collapse: separate;
@@ -72,6 +73,7 @@
         }
     </style>
     {% include 'panel_access.html' %}
+    <script src="{{ url_for('static', filename='backup_progress.js') }}?v={{ app_version }}"></script>
 </head>
 <body class="theme-{{ config.theme }}">
     <div class="sidebar">
@@ -334,7 +336,7 @@
                         ${inputHTML}
                         <div class="modal-actions" id="modal-actions">${actionsHTML}</div>
                         <div class="modal-progress-container" id="modal-progress-container" style="display: ${showProgress ? 'block' : 'none'};">
-                            <div class="modal-progress-fill" id="modal-progress-fill"></div>
+                            <div class="modal-progress-fill" id="modal-progress-fill" style="width: 35%; animation: backup-pulse 1.2s ease-in-out infinite;"></div>
                         </div>
                     </div>
                 `;
@@ -359,16 +361,19 @@
                 // Expose methods for progress modal
                 if (showProgress) {
                     resolve({
+                        updateMessage: (msg) => {
+                            overlay.querySelector('#modal-msg-text').textContent = msg;
+                        },
                         updateProgress: (pct) => {
                             let fill = overlay.querySelector('.modal-progress-fill');
-                            if(fill) fill.style.width = pct + '%';
+                            if(fill) { fill.style.animation = 'none'; fill.style.width = pct + '%'; }
                         },
                         finish: (msg) => {
                             return new Promise(fRes => {
                                 let fill = overlay.querySelector('.modal-progress-fill');
-                                if(fill) fill.style.width = '100%';
+                                if(fill) { fill.style.animation = 'none'; fill.style.width = '100%'; }
                                 setTimeout(() => {
-                                    overlay.querySelector('#modal-msg-text').innerHTML = msg;
+                                    overlay.querySelector('#modal-msg-text').textContent = msg;
                                     overlay.querySelector('#modal-progress-container').style.display = 'none';
                                     overlay.querySelector('#modal-actions').innerHTML = `<button id="modal-btn-finish" class="btn btn-start">Okay</button>`;
                                     overlay.querySelector('#modal-btn-finish').onclick = () => { overlay.remove(); fRes(); };
@@ -376,7 +381,7 @@
                             });
                         },
                         error: (msg) => {
-                            overlay.querySelector('#modal-msg-text').innerHTML = msg;
+                            overlay.querySelector('#modal-msg-text').textContent = msg;
                             overlay.querySelector('#modal-progress-container').style.display = 'none';
                             overlay.querySelector('#modal-actions').innerHTML = `<button id="modal-btn-err" class="btn btn-stop">Close</button>`;
                             overlay.querySelector('#modal-btn-err').onclick = () => { overlay.remove(); };
@@ -414,26 +419,14 @@
             let confirmCreate = await showModal("Create Manual Backup", "Are you sure you want to create a new manual backup?", true);
             if (!confirmCreate) return;
             
-            let modal = await showModal("Creating Backup", "Compressing ecosystem into a ZIP archive... Please wait.", false, true);
-            let p = 0;
-            let anim = setInterval(() => { p += (95 - p) * 0.05; modal.updateProgress(p); }, 500);
-            
+            let modal = await showModal("Creating Backup", "Preparing the server backup...", false, true);
             try {
-                let res = await fetch('/api/backup/create', { method: 'POST' });
-                let data = await res.json();
-                
-                clearInterval(anim);
-                modal.updateProgress(100);
-                
-                if (data.status === 'success') {
-                    await modal.finish("Backup created successfully!");
-                    fetchBackups();
-                } else {
-                    modal.error("Error: " + data.message);
-                }
+                await window.runBackupJob(false, message => modal.updateMessage(message));
+                await modal.finish("Backup created successfully!");
+                fetchBackups();
             } catch(e) {
-                clearInterval(anim);
-                modal.error("Request failed.");
+                modal.error(e.message || "Unable to create the backup. Check the panel logs.");
+                fetchBackups();
             }
         }
         
@@ -460,22 +453,12 @@
             if (backupChoice === 'cancel' || !backupChoice) return;
 
             if (backupChoice === 'backup') {
-                let bModal = await showModal("Creating Backup", "Compressing ecosystem into a ZIP archive... Please wait.", false, true);
+                let bModal = await showModal("Creating Backup", "Preparing the safety backup...", false, true);
                 try {
-                    let bRes = await fetch('/api/backup/create', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ is_restore: true })
-                    });
-                    let bData = await bRes.json();
-                    if (bData.status === 'success') {
-                        await bModal.finish("Backup created successfully before restore.");
-                    } else {
-                        bModal.error("Error creating backup: " + bData.message);
-                        return;
-                    }
+                    await window.runBackupJob(true, message => bModal.updateMessage(message));
+                    await bModal.finish("Backup created successfully before restore.");
                 } catch(e) {
-                    bModal.error("Backup request failed.");
+                    bModal.error(e.message || "Safety backup could not be confirmed. Restore was not started.");
                     return;
                 }
             }

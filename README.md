@@ -112,6 +112,24 @@ check the inbox/spam folder and SMTP settings before resending.
 ### Backups, imports and resets
 
 Use **Backups** to create or restore server ZIPs, subject to your permissions.
+Creation runs in the background with progress checks; new ZIPs appear in the list
+only after completion and verification. Stop Minecraft first for a consistent snapshot of worlds and
+plugin databases. Failed backups report the storage/file error without replacing
+existing backups. Automatic backup frequency and retention are configured in
+**Settings**. Backup creation cannot overlap with a restore, import or purge.
+
+Byte Panel backups include a file called **`ServerEngineInfo`** at the root of the
+ZIP. It contains the server metadata Byte Panel uses when importing a server:
+the saved Minecraft version, server software/source (Vanilla, Paper, Purpur or
+Forge), RAM allocation and any recorded Java or Forge launch settings. This lets
+the panel automatically identify the server and apply its saved engine settings
+so it can run correctly. Keep this file intact and at the root of the ZIP when
+moving a server between Byte Panel installations.
+
+When importing a server ZIP from another source without `ServerEngineInfo`,
+Byte Panel asks you to select the Minecraft version, server software and RAM
+manually, then creates the file for future backups.
+
 Imports/restores replace the active server, preserve the original owner and acting
 user, remove other panel accounts and revoke their previous sessions.
 
