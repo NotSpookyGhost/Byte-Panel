@@ -1,4 +1,4 @@
-"""Authenticated plugin files and config editing for Paper/Purpur servers."""
+"""Authenticated plugin/data uploads and config editing for Paper/Purpur."""
 
 import hashlib
 import os
@@ -216,9 +216,9 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
     def upload():
         file = request.files.get('file')
         if not file or not file.filename:
-            abort(400, description='Choose a plugin JAR or text config to upload.')
+            abort(400, description='Choose a plugin JAR, config or data file to upload.')
         filename = file.filename
-        if '/' in filename or '\\' in filename:
+        if '/' in filename or '\\' in filename or ':' in filename:
             abort(400, description='Upload a filename without a folder path.')
         folder = checked_path(request.form.get('path', ''))
         if not folder.is_dir():
@@ -228,9 +228,13 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
         is_jar = target.suffix.lower() == '.jar'
         if is_jar and folder != root:
             abort(400, description='Upload plugin JARs into the root plugins folder.')
-        if not is_jar and target.suffix.lower() not in TEXT_EXTENSIONS:
-            abort(415, description='Upload a .jar plugin or a supported text config.')
-        limit = MAX_UPLOAD_BYTES if is_jar else MAX_CONFIG_BYTES
+        # Plugins consume many opaque formats (.json.gz, .schem, .dat, etc.).
+        # Store these unchanged in an existing plugin subfolder, never extract
+        # archives or execute/import their contents. Root uploads stay restricted.
+        is_data_file = not is_jar and folder != root
+        if not is_jar and not is_data_file and target.suffix.lower() not in TEXT_EXTENSIONS:
+            abort(415, description='Open a plugin subfolder to upload data files. The root accepts plugin JARs and supported text configs.')
+        limit = MAX_UPLOAD_BYTES if is_jar or is_data_file else MAX_CONFIG_BYTES
         fd, temp_name = tempfile.mkstemp(prefix='.panel-upload-', dir=folder)
         try:
             size = 0
@@ -241,7 +245,7 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
                         break
                     size += len(chunk)
                     if size > limit:
-                        abort(413, description='Plugin JARs are limited to 64 MiB; text configs to 1 MiB.')
+                        abort(413, description='JARs and files in plugin subfolders are limited to 64 MiB; root text configs to 1 MiB.')
                     handle.write(chunk)
             if is_jar:
                 try:
@@ -250,7 +254,7 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
                             abort(400, description='This JAR has no plugin.yml or paper-plugin.yml descriptor.')
                 except zipfile.BadZipFile:
                     abort(400, description='The uploaded JAR is not a valid Java archive.')
-            else:
+            elif not is_data_file:
                 validate_text(Path(temp_name).read_bytes())
             backup = None
             with _WRITE_LOCK:
@@ -267,7 +271,9 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
                     abort(409, description='The existing file was removed. Refresh and upload again.')
                 os.chmod(temp_name, stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o644)
                 os.replace(temp_name, target)
-            return jsonify(message='File uploaded. Restart the server to apply changes.',
+            message = ('File uploaded. Follow the plugin import/reload instructions; data is not imported automatically.'
+                       if is_data_file else 'File uploaded. Restart the server to apply changes.')
+            return jsonify(message=message,
                            path=relative, backup=backup), 201
         finally:
             if os.path.exists(temp_name):

@@ -1,5 +1,6 @@
 """Plugin routes tested against temporary server data, without booting Minecraft."""
 
+import gzip
 import io
 from pathlib import Path
 import sys
@@ -197,6 +198,115 @@ class PluginManagerTests(unittest.TestCase):
         listing = self.client.get('/api/plugins/files?path=Demo').json
         self.assertEqual({entry['name'] for entry in listing['entries']}, {'config.yml', 'messages.yml'})
 
+    def test_luckperms_data_upload_round_trips_without_importing_for_both_engines(self):
+        directory = self.root / 'LuckPerms'
+        directory.mkdir()
+        database = directory / 'luckperms-h2-v2.mv.db'
+        database.write_bytes(b'existing permissions')
+        exported = gzip.compress(b'{"metadata":{},"groups":[],"users":[]}')
+        for engine in ('Paper', 'Purpur'):
+            with self.subTest(engine=engine):
+                self.config['server_type'] = engine
+                name = engine + '-preset.json.gz'
+                response = self.upload(exported, name, 'LuckPerms')
+                self.assertEqual(response.status_code, 201, response.json)
+                self.assertEqual(response.json['path'], 'LuckPerms/' + name)
+                self.assertIn('not imported automatically', response.json['message'])
+                self.assertEqual((directory / name).read_bytes(), exported)
+                self.assertEqual(database.read_bytes(), b'existing permissions')
+                entries = self.client.get('/api/plugins/files?path=LuckPerms').json['entries']
+                self.assertFalse(next(entry for entry in entries if entry['name'] == name)['editable'])
+                self.assertEqual(self.client.get('/api/plugins/file', query_string={'path': 'LuckPerms/' + name}).status_code, 415)
+                download = self.client.get('/api/plugins/download', query_string={'path': 'LuckPerms/' + name})
+                self.assertEqual(download.data, exported)
+                self.assertIn('attachment', download.headers['Content-Disposition'])
+                download.close()
+
+    def test_nested_data_uploads_are_opaque_and_archives_are_not_extracted(self):
+        directory = self.root / 'Demo' / 'presets'
+        directory.mkdir(parents=True)
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as handle:
+            handle.writestr('../escaped.txt', 'must stay inside archive')
+        for name, data in [('bundle.zip', archive.getvalue()), ('build.schem', b'\x00\xffschematic'),
+                           ('state.dat', b'\x00state'), ('preset', b'\xff\x00')]:
+            with self.subTest(name=name):
+                response = self.upload(data, name, 'Demo/presets')
+                self.assertEqual(response.status_code, 201, response.json)
+                self.assertEqual((directory / name).read_bytes(), data)
+        self.assertFalse((directory.parent / 'escaped.txt').exists())
+        self.assertEqual({entry.name for entry in directory.iterdir()}, {'bundle.zip', 'build.schem', 'state.dat', 'preset'})
+        self.assertEqual(self.upload(b'data', 'preset.json.gz').status_code, 415)
+        self.assertEqual(self.upload(self.jar(), 'Demo.JAR', 'Demo/presets').status_code, 400)
+
+    def test_data_upload_size_limits_are_separate_from_editor_limits(self):
+        directory = self.root / 'Demo'
+        directory.mkdir()
+        with patch.object(plugin_manager, 'MAX_CONFIG_BYTES', 16):
+            response = self.upload(b'a' * 32, 'large.json', 'Demo')
+            self.assertEqual(response.status_code, 201)
+            listing = self.client.get('/api/plugins/files?path=Demo').json['entries']
+            self.assertFalse(listing[0]['editable'])
+            self.assertEqual(self.client.get('/api/plugins/file?path=Demo/large.json').status_code, 413)
+            self.assertEqual(self.upload(b'a' * 32, 'large.json').status_code, 413)
+        with patch.object(plugin_manager, 'MAX_UPLOAD_BYTES', 32):
+            self.assertEqual(self.upload(b'x' * 32, 'boundary.dat', 'Demo').status_code, 201)
+            self.assertEqual(self.upload(b'x' * 33, 'oversize.dat', 'Demo').status_code, 413)
+        self.assertFalse((directory / 'oversize.dat').exists())
+        self.assertFalse(any(entry.name.startswith('.panel-') for entry in directory.iterdir()))
+
+    def test_data_replacement_requires_current_confirmation_and_keeps_backup(self):
+        directory = self.root / 'LuckPerms'
+        directory.mkdir()
+        name = 'preset.json.gz'
+        old, new = gzip.compress(b'old'), gzip.compress(b'new')
+        self.assertEqual(self.upload(old, name, 'LuckPerms').status_code, 201)
+        conflict = self.upload(new, name, 'LuckPerms')
+        self.assertEqual(conflict.status_code, 409)
+        self.assertTrue(conflict.json['conflict'])
+        target = directory / name
+        self.assertEqual(target.read_bytes(), old)
+        target.write_bytes(b'changed by plugin')
+        stale = self.upload(new, name, 'LuckPerms', replace_revision=conflict.json['revision'])
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(target.read_bytes(), b'changed by plugin')
+        replaced = self.upload(new, name, 'LuckPerms', replace_revision=stale.json['revision'])
+        self.assertEqual(replaced.status_code, 201)
+        self.assertEqual(target.read_bytes(), new)
+        self.assertEqual((self.data / 'plugin-config-backups' / replaced.json['backup']).read_bytes(), b'changed by plugin')
+        conflict = self.upload(old, name, 'LuckPerms')
+        target.unlink()
+        self.assertEqual(self.upload(old, name, 'LuckPerms', replace_revision=conflict.json['revision']).status_code, 409)
+        self.assertFalse(target.exists())
+
+    def test_data_upload_path_guards_and_existing_folder_requirement(self):
+        directory = self.root / 'LuckPerms'
+        directory.mkdir()
+        for folder in ('../outside', '/absolute', 'C:/outside', '..\\outside', '.hidden', 'LuckPerms/../../outside'):
+            with self.subTest(folder=folder):
+                self.assertIn(self.upload(b'data', 'preset.json.gz', folder).status_code, (400, 403))
+        for name in ('../escape.dat', '/escape.dat', 'sub/escape.dat', '..\\escape.dat', '.secret', 'C:escape.dat'):
+            with self.subTest(name=name):
+                self.assertEqual(self.upload(b'data', name, 'LuckPerms').status_code, 400)
+        self.assertEqual(self.upload(b'data', 'preset.json.gz', 'LuckPerms/missing').status_code, 404)
+        self.assertFalse((directory / 'missing').exists())
+        (directory / 'preset.json.gz').mkdir()
+        self.assertEqual(self.upload(b'data', 'preset.json.gz', 'LuckPerms').status_code, 409)
+
+    def test_data_upload_rejects_file_and_folder_symlinks(self):
+        directory = self.root / 'LuckPerms'
+        directory.mkdir()
+        outside = self.data / 'private.dat'
+        outside.write_bytes(b'private')
+        try:
+            (directory / 'linked.dat').symlink_to(outside)
+            (self.root / 'linked-folder').symlink_to(self.data, target_is_directory=True)
+        except OSError:
+            self.skipTest('This host does not permit symbolic links')
+        self.assertEqual(self.upload(b'overwrite', 'linked.dat', 'LuckPerms').status_code, 403)
+        self.assertEqual(self.upload(b'overwrite', 'private.dat', 'linked-folder').status_code, 403)
+        self.assertEqual(outside.read_bytes(), b'private')
+
     def test_authentication_engine_gate_and_csrf(self):
         guest = self.app.test_client()
         self.assertEqual(guest.get('/api/plugins/files').status_code, 401)
@@ -269,6 +379,11 @@ class PluginManagerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.assertIn(b'data-csrf-token="test-csrf"', response.data)
         self.assertIn(b'id="plugin-content"', response.data)
+        self.assertIn(b'id="plugin-upload-destination"', response.data)
+        self.assertIn(b'preset.json.gz', response.data)
+        self.assertIn(b'lp import preset.json.gz', response.data)
+        self.assertIn(b'plugins.js?v=', response.data)
+        self.assertNotIn(b'accept=".jar', response.data)
         for control in ('config-search', 'search-previous', 'search-next', 'search-match-case', 'search-status'):
             self.assertIn(('id="' + control + '"').encode(), response.data)
         self.assertLess(response.data.index(b'plugin_search.js'), response.data.index(b'plugins.js'))

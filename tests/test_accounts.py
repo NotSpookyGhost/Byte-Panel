@@ -653,6 +653,23 @@ class AccountIntegrationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.json)
         self.assertFalse(target.exists())
 
+    def test_plugin_data_upload_requires_management_and_both_csrf_tokens(self):
+        directory = self.root / 'plugins' / 'LuckPerms'
+        directory.mkdir(parents=True)
+        def upload(client, headers):
+            return client.post('/api/plugins/upload', headers=headers,
+                               data={'path': 'LuckPerms', 'file': (io.BytesIO(b'\x1f\x8bdata'), 'preset.json.gz')})
+        reader = self.client_for(self.create('reader', ['plugins.view']))
+        self.assertEqual(upload(reader, self.headers(reader)).status_code, 403)
+        manager = self.client_for(self.create('manager', ['plugins.manage']))
+        headers = self.headers(manager)
+        for missing in ('X-Panel-CSRF', 'X-Plugin-CSRF-Token'):
+            self.assertEqual(upload(manager, {key: value for key, value in headers.items() if key != missing}).status_code, 403)
+        self.assertFalse((directory / 'preset.json.gz').exists())
+        response = upload(manager, headers)
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertEqual((directory / 'preset.json.gz').read_bytes(), b'\x1f\x8bdata')
+
     def prepare_smtp_mock(self, factory):
         smtp = factory.return_value
         smtp.ehlo.return_value = (250, b'Test SMTP')

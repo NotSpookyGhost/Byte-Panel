@@ -97,10 +97,13 @@
         const result = await api('/api/plugins/files?path=' + encodeURIComponent(path));
         folder = result.path;
         renderBreadcrumbs();
+        document.getElementById('plugin-upload-destination').textContent = 'Data/config destination: plugins/'
+            + (folder ? folder + '/' : ' (open a plugin subfolder for data files).');
         list.replaceChildren();
         document.getElementById('plugin-list-status').textContent = result.entries.length
             ? result.entries.length + ' items. Select a folder or config to open it.'
-            : 'This folder is empty. Upload a plugin, then restart the server to generate its configs.';
+            : folder ? 'This folder is empty. Upload config or data files here.'
+                : 'This folder is empty. Upload a plugin, then restart the server to generate its folders.';
         result.entries.forEach(entry => {
             const row = document.createElement('tr');
             row.dataset.path = entry.path;
@@ -131,7 +134,7 @@
             });
             const kind = document.createElement('span');
             kind.className = 'file-kind';
-            kind.textContent = entry.kind === 'folder' ? 'Folder' : entry.name.toLowerCase().endsWith('.jar') ? 'Plugin JAR' : entry.editable ? 'Text config' : 'Download only';
+            kind.textContent = entry.kind === 'folder' ? 'Folder' : entry.name.toLowerCase().endsWith('.jar') ? 'Plugin JAR' : entry.editable ? 'Text config' : 'Data file (download only)';
             nameCell.append(name, kind);
             const size = document.createElement('td');
             size.textContent = entry.kind === 'folder' ? '\u2014' : sizeLabel(entry.size);
@@ -215,6 +218,7 @@
     }));
     document.getElementById('plugin-upload-form').addEventListener('submit', event => {
         event.preventDefault();
+        if (window.panelCan && !window.panelCan('plugins.manage')) return;
         if (busy || !confirmDiscard()) return;
         const input = document.getElementById('plugin-upload');
         const files = Array.from(input.files);
@@ -233,7 +237,9 @@
                     try { await api('/api/plugins/upload', { method: 'POST', body: data }); }
                     catch (error) {
                         if (error.status !== 409 || !error.data.conflict) throw error;
-                        if (!window.confirm('Replace existing file ' + file.name + '? A backup of the existing file will be kept.')) {
+                        const target = data.get('path');
+                        if (!window.confirm('Replace plugins/' + (target ? target + '/' : '') + file.name
+                                + '? Stop the server before replacing files in use. A backup of the existing file will be kept.')) {
                             failures.push(file.name + ': skipped (existing file kept).');
                             continue;
                         }
@@ -245,7 +251,7 @@
             }
             input.value = '';
             await loadFolder(destination);
-            message(uploaded + ' file(s) uploaded. Restart the server to apply changes.'
+            message(uploaded + ' file(s) uploaded. Plugin JARs require a restart. For config/data files, follow the plugin import/reload instructions; uploads do not import data automatically.'
                 + (failures.length ? '\n' + failures.join('\n') : ''), failures.length > 0);
         });
     });

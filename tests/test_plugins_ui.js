@@ -8,19 +8,20 @@ const PluginConfigSearch = require('../app/static/plugin_search.js');
 const source = fs.readFileSync(path.join(__dirname, '../app/static/plugins.js'), 'utf8');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-async function setup({manage = true, confirm = true, failDelete = false} = {}) {
+async function setup({manage = true, confirm = true, failDelete = false, uploadResponses = [], failedFolder = null} = {}) {
     const document = createDocument();
     const manager = document.getElementById('plugin-manager');
     manager.dataset.csrfToken = 'plugin-csrf-test';
     const ids = ['plugin-content', 'plugin-file-list', 'plugins-message', 'editor-state', 'save-config', 'reload-config',
         'config-search', 'search-previous', 'search-next', 'search-match-case', 'search-status', 'plugin-breadcrumbs',
-        'plugin-list-status', 'editor-path', 'refresh-files', 'plugin-upload-form'];
+        'plugin-list-status', 'editor-path', 'refresh-files', 'plugin-upload-form', 'plugin-upload', 'plugin-upload-destination'];
     for (const id of ids) manager.append(document.getElementById(id));
     const calls = [];
     const confirmations = [];
     let removed = false;
     const entries = [
         {path: 'Demo', name: 'Demo', kind: 'folder', size: 0, editable: false},
+        {path: 'LuckPerms', name: 'LuckPerms', kind: 'folder', size: 0, editable: false},
         {path: 'Demo.JAR', name: 'Demo.JAR', kind: 'file', size: 1234, editable: false},
         {path: 'config.yml', name: 'config.yml', kind: 'file', size: 50, editable: true},
     ];
@@ -34,7 +35,12 @@ async function setup({manage = true, confirm = true, failDelete = false} = {}) {
         let data;
         let status = 200;
         if (url.startsWith('/api/plugins/files?')) {
-            data = {path: '', entries: entries.filter(entry => !removed || entry.path !== 'Demo.JAR')};
+            const folder = new URLSearchParams(url.split('?')[1]).get('path');
+            if (folder === failedFolder) { status = 403; data = {error: 'Cannot access this folder.'}; }
+            else data = {path: folder, entries: folder === 'LuckPerms' ? [
+                {path: 'LuckPerms/imports', name: 'imports', kind: 'folder', size: 0, editable: false},
+                {path: 'LuckPerms/preset.json.gz', name: 'preset.json.gz', kind: 'file', size: 150, editable: false}
+            ] : folder ? [] : entries.filter(entry => !removed || entry.path !== 'Demo.JAR')};
         } else if (url.startsWith('/api/plugins/file?')) {
             data = {path: 'config.yml', content: 'key: true\nkey: false', revision: 'config-revision'};
         } else if (url.startsWith('/api/plugins/delete?')) {
@@ -42,10 +48,19 @@ async function setup({manage = true, confirm = true, failDelete = false} = {}) {
         } else if (url === '/api/plugins/delete' && options.method === 'DELETE') {
             if (failDelete) { status = 409; data = {error: 'This JAR changed. Confirm again.'}; }
             else { removed = true; data = {message: 'Plugin JAR deleted. Configs kept.', backup: 'safe-Demo.JAR.bak'}; }
+        } else if (url === '/api/plugins/upload' && options.method === 'POST') {
+            const response = uploadResponses.shift() || {status: 201, data: {message: 'Uploaded'}};
+            status = response.status;
+            data = response.data;
         } else throw new Error('Unexpected request: ' + url);
-        return {ok: status === 200, status, headers: {get: () => 'application/json'}, json: async () => data};
+        return {ok: status >= 200 && status < 300, status, headers: {get: () => 'application/json'}, json: async () => data};
     }
-    vm.runInNewContext(source, {document, window, fetch, console});
+    class FormData {
+        constructor() { this.values = new Map(); }
+        append(name, value) { this.values.set(name, value); }
+        get(name) { return this.values.get(name) ?? null; }
+    }
+    vm.runInNewContext(source, {document, window, fetch, console, FormData});
     await settle();
     const list = document.getElementById('plugin-file-list');
     const row = name => list.children.find(element => element.dataset.path === name);
@@ -107,5 +122,66 @@ async function setup({manage = true, confirm = true, failDelete = false} = {}) {
     assert.match(conflict.document.getElementById('plugins-message').textContent, /changed/);
     assert.equal(conflict.document.getElementById('plugins-message').dataset.error, 'true');
     assert.equal(conflict.deleteButton().disabled, false);
-    console.log('Plugin UI checks passed (folder icons, JAR actions, confirmation/cancellation, permissions, editor preservation).');
+
+    const upload = await setup();
+    upload.row('LuckPerms').children[0].children[0].click();
+    await settle();
+    assert.match(upload.document.getElementById('plugin-upload-destination').textContent, /plugins\/LuckPerms\//);
+    assert.equal(upload.row('LuckPerms/preset.json.gz').children[0].children[1].textContent, 'Data file (download only)');
+    assert.equal(upload.row('LuckPerms/preset.json.gz').children[2].children[0].textContent, 'Download');
+    upload.row('LuckPerms/imports').children[0].children[0].click();
+    await settle();
+    assert.match(upload.document.getElementById('plugin-upload-destination').textContent, /plugins\/LuckPerms\/imports\//);
+    assert.match(upload.document.getElementById('plugin-list-status').textContent, /Upload config or data files here/);
+    const input = upload.document.getElementById('plugin-upload');
+    input.files = [{name: 'preset.json.gz'}, {name: 'large.json'}, {name: 'Demo.JAR'}];
+    upload.document.getElementById('plugin-upload-form').fire('submit');
+    await settle();
+    const uploaded = upload.calls.filter(call => call.url === '/api/plugins/upload');
+    assert.equal(uploaded.length, 3);
+    assert.deepEqual(uploaded.map(call => call.options.body.get('path')), ['LuckPerms/imports', 'LuckPerms/imports', '']);
+    assert.deepEqual(uploaded.map(call => call.options.body.get('file').name), ['preset.json.gz', 'large.json', 'Demo.JAR']);
+    assert.ok(uploaded.every(call => call.options.headers['X-Plugin-CSRF-Token'] === 'plugin-csrf-test'));
+    assert.match(upload.document.getElementById('plugins-message').textContent, /3 file\(s\) uploaded/);
+    assert.match(upload.document.getElementById('plugins-message').textContent, /uploads do not import data automatically/);
+    assert.equal(upload.calls.at(-1).url, '/api/plugins/files?path=LuckPerms%2Fimports');
+
+    for (const confirm of [true, false]) {
+        const replacement = await setup({confirm, uploadResponses: [
+            {status: 409, data: {error: 'Already exists', conflict: true, revision: 'data-revision'}}
+        ]});
+        replacement.row('LuckPerms').children[0].children[0].click();
+        await settle();
+        replacement.document.getElementById('plugin-upload').files = [{name: 'preset.json.gz'}];
+        replacement.document.getElementById('plugin-upload-form').fire('submit');
+        await settle();
+        const writes = replacement.calls.filter(call => call.url === '/api/plugins/upload');
+        assert.equal(writes.length, confirm ? 2 : 1);
+        assert.match(replacement.confirmations[0], /plugins\/LuckPerms\/preset.json.gz/);
+        assert.match(replacement.confirmations[0], /backup/);
+        if (confirm) assert.equal(writes[1].options.body.get('replace_revision'), 'data-revision');
+        else assert.match(replacement.document.getElementById('plugins-message').textContent, /skipped/);
+    }
+
+    denied.document.getElementById('plugin-upload').files = [{name: 'preset.json.gz'}];
+    denied.document.getElementById('plugin-upload-form').fire('submit');
+    await settle();
+    assert.equal(denied.calls.some(call => call.url === '/api/plugins/upload'), false);
+
+    const inaccessible = await setup({failedFolder: 'LuckPerms'});
+    inaccessible.row('LuckPerms').children[0].children[0].click();
+    await settle();
+    assert.match(inaccessible.document.getElementById('plugin-upload-destination').textContent, /open a plugin subfolder/);
+    assert.match(inaccessible.document.getElementById('plugins-message').textContent, /Cannot access/);
+
+    const partial = await setup({uploadResponses: [{status: 413, data: {error: 'File is too large.'}}]});
+    partial.row('LuckPerms').children[0].children[0].click();
+    await settle();
+    partial.document.getElementById('plugin-upload').files = [{name: 'too-large.dat'}, {name: 'preset.json.gz'}];
+    partial.document.getElementById('plugin-upload-form').fire('submit');
+    await settle();
+    assert.match(partial.document.getElementById('plugins-message').textContent, /1 file\(s\) uploaded/);
+    assert.match(partial.document.getElementById('plugins-message').textContent, /too-large.dat: File is too large/);
+    assert.equal(partial.document.getElementById('plugins-message').dataset.error, 'true');
+    console.log('Plugin UI checks passed (folder navigation, data upload destinations, JAR routing, replacement confirmation, permissions, partial failures, search, and deletion).');
 })().catch(error => { console.error(error); process.exitCode = 1; });

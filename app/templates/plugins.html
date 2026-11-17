@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Plugins - {{ config.panel_name }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='plugins.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='plugins.css', v=app_version) }}">
     <link rel="icon" href="{{ '/branding-assets/favicon.ico' if has_custom.favicon else url_for('static', filename='bytedev_logo.png') }}">
-    <script src="{{ url_for('static', filename='plugin_search.js') }}" defer></script>
-    <script src="{{ url_for('static', filename='plugins.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='plugin_search.js', v=app_version) }}" defer></script>
+    <script src="{{ url_for('static', filename='plugins.js', v=app_version) }}" defer></script>
     {% include 'panel_access.html' %}
 </head>
 <body class="theme-{{ config.theme }} plugins-page">
@@ -41,18 +41,21 @@
         <div class="main-content">
             <section class="card plugins-upload" aria-labelledby="upload-title">
                 <div>
-                    <h1 id="upload-title">Plugins &amp; configs</h1>
+                    <h1 id="upload-title">Plugins &amp; files</h1>
                     <p>Upload plugin JARs to the plugins folder, then start or restart your server to generate their config folders.</p>
-                    <p>Stop the server before editing configs or deleting plugins. Restart to apply uploads, edits and deletions. Deleting a JAR keeps its config folders and saves a recoverable backup.</p>
+                    <p>Open a plugin folder below to upload presets, compressed exports or other data files into it. Files are stored unchanged, not extracted or imported automatically.</p>
+                    <p>Stop the server before editing configs, replacing files in use or deleting plugins. Restart for JAR changes; follow each plugin's instructions for config reloads and data imports. Deleting a JAR keeps its config folders and saves a recoverable backup.</p>
                 </div>
                 <form data-permission="plugins.manage" id="plugin-upload-form">
-                    <label for="plugin-upload">Choose plugin JARs or config files</label>
+                    <label for="plugin-upload">Choose plugin JARs, configs or data files</label>
                     <div class="plugins-upload-controls">
                         <input class="plugin-interactive" id="plugin-upload" type="file" multiple required
-                            accept=".jar,.yml,.yaml,.json,.toml,.properties,.conf,.cfg,.ini,.txt,.xml,.csv,.md,.log">
+                            aria-describedby="plugin-upload-destination plugin-upload-help">
                         <button class="btn btn-primary plugin-interactive" type="submit" id="upload-button">Upload files</button>
                     </div>
-                    <p class="plugins-hint">Up to 64 MiB per JAR or 1 MiB per text config. JARs go in the root folder; configs go in the folder you have open.</p>
+                    <p id="plugin-upload-destination" class="plugins-editor-path" role="status" aria-live="polite">Data/config destination: plugins/ (open a plugin subfolder for data files).</p>
+                    <p id="plugin-upload-help" class="plugins-hint">JARs always go in the root plugins folder (64 MiB max). Non-JAR files go in the folder you have open: up to 64 MiB in subfolders, or supported text configs up to 1 MiB in the root. The text editor remains limited to 1 MiB.</p>
+                    <p class="plugins-hint">LuckPerms: open <code>plugins/LuckPerms</code> and upload your exported <code>preset.json.gz</code>. Then, with the server running, use <code>lp import preset.json.gz</code> in the console to merge it. Uploading alone does not change permissions.</p>
                 </form>
             </section>
             <div id="plugins-message" class="plugins-message" role="status" aria-live="polite" hidden></div>
