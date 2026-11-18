@@ -6,253 +6,194 @@
 
 ## Overview
 
-Byte Panel is a self-hosted web panel for managing a Minecraft Java Edition server
-on Docker or Unraid. Each container manages one server, with its files and panel
-settings kept in a persistent `/data` volume.
+Byte Panel is a self-hosted Minecraft Java Edition server panel for Docker and
+Unraid. Each container manages one server, with persistent files and settings in
+its `/data` volume.
 
 ## Features
 
-- **Multiple server engines:** Vanilla, Paper, Purpur, Fabric and Forge, with live
-  version lists and automatic Java runtime selection.
-- **Server management:** Start/stop controls, RAM allocation, console commands,
-  logs, player history and server properties.
-- **Plugins and files:** Upload/delete Paper and Purpur plugins, upload data into
-  plugin subfolders, and edit/search text configs.
-- **Backups:** Create, download, restore and import server ZIPs.
-- **User permissions:** Protected setup owner, administrator accounts and custom
-  permissions, including separate backup creation and restore access.
-- **Email invitations:** SMTP delivery, customizable welcome/password emails,
-  generated temporary passwords and required password changes on first login.
-- **Customization:** Server name and icon, favicon, background and appearance settings.
+- **Server engines:** Vanilla, Paper, Purpur, Fabric and Forge, with live version
+  lists and automatic Java selection.
+- **Server controls:** Start, stop, restart, optional startup/crash recovery,
+  console command history, logs, players and server properties.
+- **Plugins:** Upload/delete Paper and Purpur plugins, upload plugin data files,
+  and edit/search text configs.
+- **Backups:** Manual and scheduled ZIP backups, optional shutdown during backup,
+  downloads, manual-backup renaming, restores and imports.
+- **Accounts:** Owner protection, administrator/custom permissions and separate
+  backup creation, restore and import permissions.
+- **Invitations:** SMTP welcome/password emails, customizable templates and
+  temporary passwords that must be changed on first login.
+- **Customization:** Server icon/name, appearance settings and public BlueMap
+  access through `/map`.
 
-## Using and configuring the panel
+## Using the panel
 
-### Server controls and settings
+### Everyday controls
 
-During setup, choose your engine, Minecraft version and RAM allocation, or import
-an existing server ZIP. Available versions depend on the engine.
+Choose the engine, Minecraft version and RAM during setup, or import a server ZIP.
+Available Minecraft versions depend on the engine.
 
 Use **Overview** for server controls, **Console** for commands, **Logs** and
-**Players** to review activity, and **Properties** to edit server settings.
-Console commands do not need a leading `/`: enter `help`, `plugins`, or
-`say Hello World`. The panel adds the prefix for modern Paper/Purpur while keeping
-the native console format for older engines. Commands already starting with `/`
-(including special plugin prefixes such as `//`) are left unchanged.
-Stop the server before changing files that it uses, then restart when required.
-Use **Panel Settings → General** to change the server name. The product name
-stays **Byte Panel**. Settings are grouped into General, Runtime, Backups,
-Appearance, Email and Operations.
+**Players** for activity, and **Properties** for Minecraft settings. Click your
+sidebar username to open **My Account**.
 
-Under **Panel Settings → Runtime**, two separate options are available (off by default):
+Console commands do not need a leading `/`: try `help`, `plugins` or
+`say Hello World`. Existing prefixes, including `//`, are preserved.
+**↑ / ↓** recall up to 100 recent commands; moving past the newest restores your
+unfinished draft. Press **Enter** or **Send** to run a recalled command.
+History stays in the current page and clears when you refresh or leave it.
 
-- **Automatically start server when Byte Panel starts:** starts the configured
-  server once when the panel/container starts. Enabling it does not immediately
-  start an offline server.
-- **Automatically restart server after a crash:** restarts a panel-managed
-  Minecraft process after an unexpected non-zero exit, after a 10-second delay.
-  Recovery waits for active backups/file operations and the old process/log reader.
-  After three restart attempts within five minutes, automatic recovery stops;
-  inspect the logs and press **Start** manually to try again.
+CPU and memory readings describe the server process. TPS is not currently measured.
 
-The **Stop** button and console `stop` commands cancel pending crash recovery.
-Clean exits stay stopped. An intentional shutdown backup uses its own stop/backup/
-start workflow, not the crash monitor. Purging, importing or restoring a server
-turns both automatic options off. If auto-start remains enabled, a later restart
-of the panel/container starts Minecraft again even if it was stopped manually.
-These options do not restart Docker itself or detect a server that is hung but
-still running.
+### Panel Settings
 
-**Appearance** offers the Obsidian theme and independent lime (default), yellow
-or electric-blue accents. Existing light/true-black themes and custom images
-remain available. Server status colors are always green (online), amber
-(starting/stopping/restarting) and red (offline); unknown status is neutral.
+| Section | What you configure |
+| --- | --- |
+| **General** | Server name and server icon |
+| **Runtime** | Java, timezone and automatic startup/crash recovery |
+| **Backups** | Schedule, retention and shutdown during backup |
+| **Addons** | Public BlueMap integration |
+| **Appearance** | Theme, accent, favicon and background |
+| **Email** | SMTP delivery and invitation settings |
+| **Operations** | Backup, import and owner-only purge/reset |
 
-Click your username at the bottom of the sidebar to open **My Account**.
-On mobile, use the menu button to open navigation.
+Use **Save Settings** or **Apply Changes** to save changes. SMTP has its own save
+button. Changing settings does not automatically restart Minecraft.
 
-Overview shows measured CPU/process memory and recent recorded player connections
-when you have Players permission. TPS is marked unavailable because the current
-backend does not measure it; it is not a live TPS monitor.
+**Server icon:** Upload a PNG, JPEG or WebP in General (up to 5 MiB and 16 million
+pixels). The panel fits it into a 64×64 PNG for the login screen, sidebar server
+badge, welcome email and Minecraft multiplayer list. Restart Minecraft for the
+in-game change. The top-left Byte Panel logo always stays white and unchanged.
 
-### Server icon
+**Automatic startup/recovery:** Both Runtime options are off by default.
+Auto-start starts Minecraft once when the panel/container starts. Crash recovery
+retries unexpected non-zero exits after 10 seconds, stopping after three attempts
+within five minutes. After that, inspect the logs and press **Start** manually.
+**Stop**, console `stop` and clean exits stay stopped.
+If auto-start remains enabled, a later container restart starts Minecraft again.
+Import, restore and purge disable both options. These settings do not restart
+Docker or detect a hung process.
 
-Open **Panel Settings → General → Server icon**, choose a PNG, JPEG or WebP (up to
-5 MiB and 16 million pixels), then save. Byte Panel creates a 64×64 PNG without
-stretching or cropping and uses it on the **sign-in screen**, in welcome emails,
-in the sidebar's **server badge**, and in Minecraft's multiplayer server list. The sign-in card
-shows your server name alongside its icon. Restart Minecraft and refresh the list
-to see the icon in-game. Byte Panel's top-left navigation logo stays unchanged.
-
-The image is stored as `server/server-icon.png` in the data volume, so server
-backups and imports carry it with them. Legacy panel-only logos no longer replace
-Byte Panel branding. The favicon and background controls stay under Appearance.
-Purging a server clears its server icon.
-
-### Public BlueMap at /map
-
-1. Install the [BlueMap plugin/mod compatible with your server](https://bluemap.bluecolored.de/wiki/getting-started/Installation.html).
-   On Paper/Purpur, upload the plugin JAR through **Plugins**, then restart the
-   Minecraft server to generate `plugins/BlueMap/` configuration files.
-2. Review BlueMap's `core.conf` and enable `accept-download` if you agree to its
-   resource download. In `webserver.conf`, keep `enabled: true` and `port: 8100`.
-   Optional `ip: "127.0.0.1"` restricts the webserver to the container itself.
-   Reload BlueMap or restart Minecraft after editing its configuration.
-3. Open **Panel Settings → General → BlueMap**, enable the **public map**, set the
-   matching internal port (default **8100**) and save. Use the sidebar **Map** link
-   or append `/map` to the panel URL:
-   - LAN: `http://192.168.0.10:5050/map`
-   - Tunnel: `https://mc.bytedev.app/map`
-
-The panel proxies BlueMap inside the same Minecraft container; it does not install
-BlueMap, render maps itself or connect to a separate external BlueMap container.
-No extra Docker port publication or Cloudflare tunnel hostname is needed when the
-existing hostname already forwards all paths to this panel. Any Cloudflare Access
-policy or path-specific rule still applies; bypass caching/HTML rewriting for
-`/map/*` if you have enabled custom rules. `/map` redirects to `/map/` so relative
-assets resolve, following [BlueMap's subdirectory proxy guidance](https://bluemap.bluecolored.de/wiki/webserver/ReverseProxy.html).
-
-The map is **public without a panel account**, including whatever world details,
-markers and player locations BlueMap exposes. Panel management remains protected.
-Only install trusted BlueMap add-ons/custom scripts because the map shares the
-panel's website origin. Integration starts disabled and is disabled again after a
-purge, import or restore; enable it deliberately for the resulting server. If
-Minecraft/BlueMap is stopped, the map displays an unavailable message. Compressed
-tiles and live player/marker updates are proxied through the same URL.
-
-### Plugins, configs and data files
+### Plugins and config files
 
 The **Plugins** tab is available on **Paper and Purpur**.
 
-1. Upload plugin JARs (up to **64 MiB**). They go into the root `plugins` folder.
-2. Start/restart the server to let plugins create their folders.
-3. Open a plugin folder to upload presets, compressed exports, schematics or
-   other non-JAR files (up to **64 MiB**). The upload form shows the destination.
-4. Open supported text configs (up to **1 MiB**) to edit them. Use **Find in
-   config** or Ctrl/Cmd+F to search, then save and follow the plugin's reload instructions.
+1. Upload plugin JARs (up to **64 MiB**), then restart Minecraft to generate configs.
+2. Open a plugin folder to upload presets, exports or other non-JAR files (up to
+   **64 MiB**). The upload form shows the destination.
+3. Open supported text configs (up to **1 MiB**), use **Find in config** or
+   Ctrl/Cmd+F, edit and save.
 
-Root non-JAR uploads are limited to supported text configs up to 1 MiB. Compressed
-files are stored unchanged, not unpacked or imported. Stop the server before
-replacing files in use, especially databases.
+For LuckPerms, upload `preset.json.gz` into `plugins/LuckPerms`, then run
+`lp import preset.json.gz` in the console. Uploading a file does not import or
+unpack it automatically.
 
-**LuckPerms example:** open `plugins/LuckPerms`, upload `preset.json.gz`, then run
-this in the console while the server is running:
-
-```text
-lp import preset.json.gz
-```
-
-This merges the exported permissions; uploading alone does not import them.
-[More about LuckPerms imports](https://luckperms.net/wiki/General-Commands).
-
-**Delete** removes a plugin JAR but keeps its config folders. Overwriting files
-requires confirmation. Previous files are saved in `/data/plugin-config-backups`
-before config saves, replacements and JAR deletions. Restart after JAR changes.
-
-### Users and permissions
-
-Configure SMTP first, then open **Users** to create an account with an email
-address and either administrator or custom permissions.
-
-New users receive a welcome email followed by a separate temporary-password email
-after approximately **12 seconds**. Delivery order depends on the mail provider.
-The temporary password expires after **24 hours** and must be changed on first login.
-**Resend invitation** generates a replacement and invalidates the old password.
-
-Passwords must be **12–256 characters**, with at least one uppercase letter,
-number and ASCII punctuation symbol, such as `!`, `@` or `#`. Users change their
-password under **My Account** (click your sidebar username).
-
-Only the original setup owner can purge the server. Creating/managing backups,
-restoring backups and importing a server ZIP are separate permissions.
-Grant file, console, restore and user-management access only to trusted users.
-
-### Email notifications and templates
-
-1. Open **Panel Settings → Email** and enable delivery.
-2. Enter your provider's hostname, port, security mode, credentials, sender
-   address and public panel URL. Enable automatic new-user emails.
-3. Save the settings, then send a test email before inviting users.
-
-For Gmail, use `smtp.gmail.com`, port `587`, **STARTTLS**, your full email address
-and a [Google app password](https://support.google.com/accounts/answer/185833).
-Leave the password field blank when saving to keep the existing saved password.
-
-Customize the email designs in:
-
-- [templates/welcomeTemplate.json](templates/welcomeTemplate.json)
-- [templates/passwordTemplate.json](templates/passwordTemplate.json)
-
-Use `{{servername}}` for the **Server name** (Settings → General), `{{username}}` for the login name,
-`{{login_url}}` for the sign-in link and `{{expires}}` for the password expiry.
-`{{password}}` is available **only in the second email**.
-
-Welcome emails automatically show the **Server icon** from General settings above
-the welcome heading, while keeping the Byte Panel banner. The icon is embedded
-in the email, so loading it does not require a connection to your panel. Email
-clients may still apply their own image-display policies. For custom welcome
-designs, use `{{server_icon}}` as an **Image block URL** (64 × 64 is recommended).
-It is not a normal website link or a text placeholder. If the icon is missing,
-unreadable or invalid, the image block is omitted. The password email is unchanged.
-
-Update the matching [plain-text fallbacks](app/templates/emails/) when changing
-wording, then rebuild and recreate the container to deploy template edits.
-These are JSON design files, not an in-panel email editor. If delivery fails,
-check the inbox/spam folder and SMTP settings before resending.
+Root-folder non-JAR uploads are limited to supported text configs up to 1 MiB.
+Deleting a plugin JAR keeps its config folders. Previous files are saved under
+`/data/plugin-config-backups` before config saves, replacements and JAR deletions.
+Stop Minecraft before replacing files in use; restart after changing plugin JARs.
 
 ### Backups, imports and resets
 
-Use **Backups** to create or restore server ZIPs, subject to your permissions.
-Creation runs in the background with progress checks; new ZIPs appear in the list
-only after completion and verification. Configure scheduling and retention under
-**Panel Settings → Backups**.
+Use **Backups** to create, download or restore ZIP archives. Manual backups can
+also be renamed; automatic backup names are fixed. Names already in use cannot
+be overwritten. The active server's backups are grouped separately from other
+servers' archives.
 
-Enable **Shut down server during backups** to gracefully stop a running server,
-wait for it to exit, create and verify the ZIP, then start Minecraft again. This
-applies to manual and scheduled backups; servers already offline stay offline.
-The setting is off by default. Players are disconnected during the backup, and
-users with backup creation permission can trigger that downtime. With this option
-off, stop Minecraft yourself for a consistent snapshot of worlds and plugin data.
+Set scheduling and retention under **Panel Settings → Backups**. New archives
+appear after creation and verification finish. Failed creation leaves existing
+archives intact.
 
-If shutdown takes more than 3 minutes, the backup aborts without force-killing the
-server. A cleanly stopped server is restarted even if archiving fails. Abnormal
-shutdown or an unfinished log reader requires manual inspection; no archive is
-created. If restart fails, any completed ZIP is kept and the panel reports the
-restart problem. Failed scheduled shutdown backups wait at least one hour before
-retrying, avoiding repeated stop/start cycles. Initial setup backups never start
-a server. Offline copies reduce the risk of inconsistent chunk files; they do not
-repair existing corruption or protect against unrelated storage failures.
+For consistent world and plugin data, enable **Shut down server during backups**
+or stop Minecraft yourself before backing up. Shutdown mode gracefully stops a
+running server, verifies the ZIP and restarts it; an already-offline server stays
+offline. This applies to manual and scheduled backups and disconnects players;
+users with backup-creation permission can trigger that downtime. It is off by
+default and reduces snapshot inconsistency, not existing corruption.
 
-Backup creation cannot overlap with panel start/stop/restart, console commands,
-settings changes, restore, import or purge. Restores require Minecraft to be fully
-offline. Do not use an external watchdog or plugin to restart Minecraft during an
-offline backup. Failed backups leave existing archives intact.
+Shutdown backups abort if Minecraft cannot stop cleanly within three minutes;
+the panel does not force-kill it. After a clean stop, restart is attempted even
+if archiving fails. If restart fails, a completed ZIP is retained and the error
+is reported. Avoid external watchdogs or plugins that restart Minecraft during
+a shutdown backup. Start/stop/restart, console commands, settings changes, restore,
+import and purge are blocked while a backup runs. Avoid other file changes.
 
-Byte Panel backups include a file called **`ServerEngineInfo`** at the root of the
-ZIP. It contains the server metadata Byte Panel uses when importing a server:
-the saved Minecraft version, server software/source (Vanilla, Paper, Purpur or
-Forge), RAM allocation and any recorded Java or Forge launch settings. This lets
-the panel automatically identify the server and apply its saved engine settings
-so it can run correctly. Keep this file intact and at the root of the ZIP when
-moving a server between Byte Panel installations.
+Backups carry the server's **`ServerEngineInfo`** file at the ZIP root. It records
+the Minecraft version, engine/source, RAM and recorded launch settings so Byte
+Panel can identify an imported server. Keep it intact when moving backups.
+ZIPs without it require manual version, engine and RAM selections during import.
 
-When importing a server ZIP from another source without `ServerEngineInfo`,
-Byte Panel asks you to select the Minecraft version, server software and RAM
-manually, then creates the file for future backups.
+- **Restore/import:** Replaces the active server, preserves the original owner
+  and acting user, removes other panel accounts and revokes existing sessions.
+  Stop Minecraft before restoring. Import is under **Settings → Operations**.
+- **Purge & Reset:** Original setup owner only. Deletes the active server,
+  server icon, panel accounts and player history; keeps existing backups,
+  panel appearance assets and SMTP settings, then returns to setup.
+- **Container updates/restarts:** Keep accounts and server data when the same
+  `/data` volume is used.
 
-Imports/restores replace the active server, preserve the original owner and acting
-user, remove other panel accounts and revoke their previous sessions.
+Minecraft ZIP backups exclude panel accounts, session keys and SMTP credentials.
+Back up the entire `/data` directory to protect the complete installation.
 
-**Purge & Reset** deletes the active server, all panel accounts and player history.
-It keeps existing backups, branding and SMTP settings, then returns to setup.
+### Accounts, invitations and email templates
 
-Container restarts and updates keep accounts when the same `/data` volume is used.
-Minecraft ZIP backups **exclude panel accounts, session keys and SMTP credentials**;
-back up the entire `/data` directory to protect the complete installation.
+Configure **Panel Settings → Email** first: enable SMTP, enter the connection
+details, sender and public panel URL, enable automatic new-user emails, then
+save and send a test. A blank password field keeps the saved password.
+For Gmail, use `smtp.gmail.com`, port **587**, **STARTTLS**, your full email
+address and a [Google app password](https://support.google.com/accounts/answer/185833).
+
+Open **Panel Users** to create users and assign permissions. When automatic
+invitations are enabled and the account has an email address, the welcome email
+is followed by a separate temporary-password email about **12 seconds** later.
+Actual arrival order depends on the mail provider. Temporary passwords expire
+after **24 hours** and must be changed on first login; resending an invitation
+invalidates the previous temporary password.
+
+Passwords require **12–256 characters**, at least one uppercase letter, a number
+and an ASCII punctuation symbol such as `!`, `@` or `#`.
+Grant console, file, restore and user-management access only to trusted users.
+
+Customize [welcomeTemplate.json](templates/welcomeTemplate.json) and
+[passwordTemplate.json](templates/passwordTemplate.json):
+
+| Placeholder | Meaning |
+| --- | --- |
+| `{{servername}}` | Server name from General settings |
+| `{{username}}` | Account username |
+| `{{login_url}}` | Sign-in link |
+| `{{expires}}` | Temporary-password expiry |
+| `{{password}}` | Temporary password — password email only |
+| `{{server_icon}}` | Welcome-email **Image block URL**, not a text placeholder |
+
+The welcome icon is embedded in the email; a missing/invalid icon is omitted.
+Update the [plain-text fallbacks](app/templates/emails/) when changing wording,
+then rebuild and recreate the container. Templates are JSON design files, not
+an in-panel editor. Check inbox/spam and SMTP settings before resending.
+
+### Public BlueMap
+
+1. Install a compatible [BlueMap plugin/mod](https://bluemap.bluecolored.de/wiki/getting-started/Installation.html)
+   and configure its webserver inside the Minecraft container.
+2. Open **Panel Settings → Addons → BlueMap**, enable the public map, enter the
+   matching internal port (default **8100**) and save.
+3. Use the sidebar **Map** link or append `/map` to your panel URL:
+   `http://SERVER-IP:5000/map` or `https://your-panel.example/map`.
+
+No extra Docker port mapping or Cloudflare tunnel hostname is needed when the
+existing route forwards all panel paths. BlueMap must be running; the panel
+proxies it but does not install it or render maps.
+
+The map is **public without a panel account**, including any world/player details
+BlueMap exposes. Existing Cloudflare Access policies still apply. Use trusted
+BlueMap scripts/addons because the map shares the panel's website origin.
+Purge, import and restore disable public map access until you enable it again.
 
 ## Installation
 
-You need Docker, Git and enough free RAM for Minecraft **plus** the host, panel and
-other services. These commands build the image locally; no Compose file is required.
+You need Docker, Git and enough RAM for Minecraft plus the host and other services.
+The image is built locally; no Compose file is required.
 
 ### 1. Download and build
 
@@ -262,12 +203,10 @@ cd Byte-Panel
 docker build --pull -t mc-panel-build:latest .
 ```
 
-Already have the source? Run the build command from the folder containing
-`Dockerfile`. The image includes Java 8, 11, 17, 21 and 25.
+Already have the source? Build from the folder containing `Dockerfile`.
+The image includes Java 8, 11, 17, 21 and 25.
 
-### 2. Create the container
-
-For a **new installation**, run:
+### 2. Create a new container
 
 ```sh
 docker run -d \
@@ -279,26 +218,22 @@ docker run -d \
   mc-panel-build:latest
 ```
 
-The example uses an Unraid data path. Replace it with a persistent directory on
-your host, separate from the source folder. Port `5000` serves the panel;
-`25565` is the default Minecraft game port.
+Replace the Unraid example path with your persistent host data directory,
+separate from the source folder. To use panel port **5050** instead, change
+`-p 5000:5000` to `-p 5050:5000`. Minecraft uses port **25565** by default.
 
 ### 3. Complete setup
 
-Open `http://SERVER-IP:5000`, create the owner account and configure your server.
-Keep the panel restricted to your trusted network until the owner is created.
-Use HTTPS through a trusted reverse proxy for remote panel access.
+Open `http://SERVER-IP:5000` (or your chosen host port), create the owner account
+and configure the server. Restrict access to your trusted network until setup is
+complete. Use HTTPS through a trusted reverse proxy for remote access.
 
-### Updating an existing installation
+### Updating
 
-Back up your persistent data and any customized source/templates, get the updated
-source, then rebuild:
+Back up `/data` and any customized source/templates, get the updated source, then
+run `docker build --pull -t mc-panel-build:latest .` again.
 
-```sh
-docker build --pull -t mc-panel-build:latest .
-```
-
-Recreate the existing container from the new image, preserving its ports,
-environment variables and **the same `/data` mapping**. Restarting the old
-container alone does not load the new image. Check the build version in the
-panel footer; no Minecraft purge or world rebuild is needed.
+**Recreate the container** using the new image, preserving its ports, environment
+variables and **the same `/data` mapping**. Restarting the old container alone does
+not load the new image. Check the version in the panel footer; no server purge or
+world rebuild is needed.

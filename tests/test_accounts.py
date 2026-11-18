@@ -281,6 +281,66 @@ class AccountIntegrationTests(unittest.TestCase):
         self.assertEqual(self.upload_test_icon(image_bytes(), field='custom_logo').status_code, 200)
         self.assertTrue((self.root / 'server-icon.png').is_file())
 
+    def test_bluemap_controls_belong_to_addons_tab_inside_settings_form(self):
+        class SettingsElements(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.forms, self.sections, self.nodes = [], [], []
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == 'form':
+                    self.forms.append(attrs.get('id'))
+                elif tag == 'section':
+                    self.sections.append(attrs.get('id'))
+                self.nodes.append((tag, attrs, tuple(self.forms), tuple(self.sections)))
+
+            def handle_endtag(self, tag):
+                if tag == 'form' and self.forms:
+                    self.forms.pop()
+                elif tag == 'section' and self.sections:
+                    self.sections.pop()
+
+        for enabled, port in ((False, 8100), (True, 8123)):
+            with self.subTest(enabled=enabled, port=port):
+                self.config.update(bluemap_enabled=enabled, bluemap_port=port)
+                self.module.save_config(self.config)
+                page = self.client.get('/settings').get_data(as_text=True)
+                parsed = SettingsElements()
+                parsed.feed(page)
+                tabs = [node for node in parsed.nodes if node[1].get('id') == 'settings-tab-addons']
+                self.assertEqual(len(tabs), 1)
+                self.assertEqual(tabs[0][0], 'button')
+                self.assertEqual(tabs[0][1]['role'], 'tab')
+                self.assertEqual(tabs[0][1]['aria-controls'], 'settings-addons')
+                self.assertEqual(tabs[0][1]['data-settings-tab'], 'addons')
+                panels = [node for node in parsed.nodes if node[1].get('id') == 'settings-addons']
+                self.assertEqual(len(panels), 1)
+                self.assertEqual(panels[0][1]['role'], 'tabpanel')
+                self.assertEqual(panels[0][1]['aria-labelledby'], 'settings-tab-addons')
+                self.assertEqual(panels[0][1]['data-settings-panel'], 'addons')
+                self.assertEqual(panels[0][2], ('settingsForm',))
+                for field in ('bluemap_settings_present', 'bluemap_enabled', 'bluemap_port'):
+                    nodes = [node for node in parsed.nodes if node[1].get('name') == field]
+                    self.assertEqual(len(nodes), 1, field)
+                    self.assertEqual(nodes[0][0], 'input')
+                    self.assertEqual(nodes[0][2], ('settingsForm',), field)
+                    self.assertIn('settings-addons', nodes[0][3], field)
+                    self.assertNotIn('settings-general', nodes[0][3], field)
+                    if field == 'bluemap_enabled':
+                        self.assertEqual('checked' in nodes[0][1], enabled)
+                    elif field == 'bluemap_port':
+                        self.assertEqual(nodes[0][1]['value'], str(port))
+                # The sidebar also links to an enabled map; scope this check to the settings form.
+                map_links = [node for node in parsed.nodes
+                             if node[0] == 'a' and node[1].get('href') == '/map/' and 'settingsForm' in node[2]]
+                self.assertEqual(len(map_links), int(enabled))
+                if enabled:
+                    self.assertIn('settings-addons', map_links[0][3])
+                    self.assertNotIn('settings-general', map_links[0][3])
+                general = page.split('id="settings-general"')[1].split('</section>')[0]
+                self.assertNotIn('BlueMap', general)
+
     def test_bluemap_settings_are_explicit_validated_and_permission_protected(self):
         original = self.module.load_config()
         self.assertFalse(original['bluemap_enabled'])
@@ -346,7 +406,7 @@ class AccountIntegrationTests(unittest.TestCase):
             self.assertIn('data-accent="' + accent + '"', page)
         page = self.client.get('/settings').get_data(as_text=True)
         self.assertNotIn('name="panel_name"', page)
-        for section in ('general', 'runtime', 'backups', 'appearance', 'email', 'operations'):
+        for section in ('general', 'runtime', 'backups', 'addons', 'appearance', 'email', 'operations'):
             self.assertIn('id="settings-' + section + '"', page)
 
     def test_obsidian_invalid_settings_do_not_write_and_permissions_hold(self):
@@ -1519,14 +1579,121 @@ class AccountIntegrationTests(unittest.TestCase):
                     self.assertEqual('>Delete</button>' in markup, may_create)
                     self.assertEqual("{ id: 'backup', text: 'Backup'" in markup, may_create)
                     # Execute the actual rendered table function, including its rename guard.
+                    labels = ('function escapeBackupLabel(' + markup.split('function escapeBackupLabel(', 1)[1]
+                              .split('function renderServerSection(', 1)[0])
                     script = markup.split('function renderBackupTable(', 1)[1].split('function showModal(', 1)[0]
                     check_js = ("const formatBytesMbGb=()=>'', formatTimestamp=()=>'';\n"
+                                + labels + '\n' +
                                 "function renderBackupTable(" + script +
                                 "\nconst row=renderBackupTable('Test',[{filename:'one.zip'}],true);\n"
                                 "if(row.includes('>Rename</button>') !== " + json.dumps(may_create) +
                                 ") throw Error('Rename permission mismatch');")
                     checked = subprocess.run(['node'], input=check_js, capture_output=True, text=True, encoding='utf-8')
                     self.assertEqual(checked.returncode, 0, checked.stderr)
+
+    def test_backup_rename_preserves_archive_and_selected_server_group(self):
+        creator = self.client_for(self.create('rename-creator', ['backups.create']))
+        selected = self.data / 'backups' / 'Rename_Selected'
+        other = self.data / 'backups' / 'Rename_Other'
+        selected.mkdir(parents=True, exist_ok=True)
+        other.mkdir(parents=True, exist_ok=True)
+        original = self.zip_bytes({'ServerEngineInfo': json.dumps(self.config), 'world/data.dat': 'saved world'})
+        (selected / 'manual.zip').write_bytes(original)
+        (other / 'manual.zip').write_bytes(b'another server backup')
+        for old_name, requested_name, saved_name in (
+                ('manual.zip', 'Before upgrade', 'Before upgrade.zip'),
+                ('Before upgrade.zip', 'Verified restore point.zip', 'Verified restore point.zip'),
+                ('Verified restore point.zip', "Owner's & friends backup", "Owner's & friends backup.zip")):
+            with self.subTest(requested_name=requested_name):
+                response = creator.post('/api/backup/rename',
+                    data={'server_name': selected.name, 'old_name': old_name, 'new_name': requested_name},
+                    headers=self.headers(creator))
+                self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+                self.assertEqual(response.json['status'], 'success')
+                self.assertFalse((selected / old_name).exists())
+                self.assertEqual((selected / saved_name).read_bytes(), original)
+                self.assertEqual((other / 'manual.zip').read_bytes(), b'another server backup')
+                listing = creator.get('/api/backups/list').json['backups'][selected.name]
+                self.assertEqual([item['filename'] for item in listing], [saved_name])
+
+    def test_backup_rename_collision_preserves_both_archives(self):
+        directory = self.data / 'backups' / 'Rename_Collision'
+        directory.mkdir(parents=True, exist_ok=True)
+        source, existing = directory / 'source.zip', directory / 'existing.zip'
+        source.write_bytes(b'source archive')
+        existing.write_bytes(b'existing archive')
+        response = self.client.post('/api/backup/rename',
+            data={'server_name': directory.name, 'old_name': source.name, 'new_name': 'existing'},
+            headers=self.headers())
+        self.assertEqual(response.json['status'], 'error')
+        self.assertIn('already exists', response.json['message'])
+        self.assertEqual(source.read_bytes(), b'source archive')
+        self.assertEqual(existing.read_bytes(), b'existing archive')
+
+    def test_backup_rename_rejects_automatic_archives(self):
+        directory = self.data / 'backups' / 'Rename_Automatic'
+        directory.mkdir(parents=True, exist_ok=True)
+        source = directory / 'Server_20261118120000_auto.zip'
+        source.write_bytes(b'automatic archive')
+        response = self.client.post('/api/backup/rename',
+            data={'server_name': directory.name, 'old_name': source.name, 'new_name': 'renamed.zip'},
+            headers=self.headers())
+        self.assertEqual(response.json['status'], 'error')
+        self.assertIn('automatic', response.json['message'].lower())
+        self.assertEqual(source.read_bytes(), b'automatic archive')
+        self.assertFalse((directory / 'renamed.zip').exists())
+
+    def test_backup_rename_requires_manage_permission_and_csrf(self):
+        directory = self.data / 'backups' / 'Rename_Permissions'
+        directory.mkdir(parents=True, exist_ok=True)
+        source = directory / 'source.zip'
+        source.write_bytes(b'protected archive')
+        payload = {'server_name': directory.name, 'old_name': source.name, 'new_name': 'renamed.zip'}
+        for name, permissions in (('rename-viewer', []), ('rename-restorer', ['backups.restore'])):
+            with self.subTest(name=name):
+                client = self.client_for(self.create(name, permissions))
+                response = client.post('/api/backup/rename', data=payload, headers=self.headers(client))
+                self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.client.post('/api/backup/rename', data=payload).status_code, 403)
+        self.assertEqual(source.read_bytes(), b'protected archive')
+        self.assertFalse((directory / 'renamed.zip').exists())
+
+    def test_backup_rename_blocks_traversal_in_every_path_field(self):
+        directory = self.data / 'backups' / 'Rename_Paths'
+        directory.mkdir(parents=True, exist_ok=True)
+        source = directory / 'source.zip'
+        source.write_bytes(b'protected archive')
+        baseline = {'server_name': directory.name, 'old_name': source.name, 'new_name': 'renamed.zip'}
+        invalid = (
+            ('server_name', '..'), ('server_name', '../Rename_Paths'),
+            ('server_name', '..\\Rename_Paths'), ('server_name', 'C:\\outside'),
+            ('old_name', '../source.zip'), ('old_name', '..\\source.zip'), ('old_name', '/source.zip'),
+            ('new_name', '../outside.zip'), ('new_name', '..\\outside.zip'),
+            ('new_name', '/outside.zip'), ('new_name', 'C:\\outside.zip'),
+        )
+        for field, value in invalid:
+            with self.subTest(field=field, value=value):
+                response = self.client.post('/api/backup/rename', data={**baseline, field: value}, headers=self.headers())
+                self.assertIn(response.status_code, (200, 400))
+                if response.status_code == 200:
+                    self.assertEqual(response.json['status'], 'error')
+                self.assertEqual(source.read_bytes(), b'protected archive')
+                self.assertEqual([item.name for item in directory.iterdir()], [source.name])
+
+    def test_backup_rename_missing_fields_or_archive_returns_actionable_error(self):
+        directory = self.data / 'backups' / 'Rename_Missing'
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {'server_name': directory.name, 'old_name': 'missing.zip', 'new_name': 'renamed.zip'}
+        for missing in payload:
+            with self.subTest(missing=missing):
+                response = self.client.post('/api/backup/rename',
+                    data={key: value for key, value in payload.items() if key != missing}, headers=self.headers())
+                self.assertEqual(response.json['status'], 'error')
+                self.assertTrue(response.json['message'])
+        response = self.client.post('/api/backup/rename', data=payload, headers=self.headers())
+        self.assertEqual(response.json['status'], 'error')
+        self.assertIn('not found', response.json['message'].lower())
+        self.assertEqual(list(directory.iterdir()), [])
 
     def test_background_backup_creation_and_status_require_create_permission(self):
         for name, permissions in (('creator', ['backups.create']), ('restorer', ['backups.restore']),

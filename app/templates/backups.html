@@ -243,7 +243,9 @@
             files.forEach(file => {
                 let sizeStr = formatBytesMbGb(file.size || 0);
                 let timeStr = file.timestamp ? formatTimestamp(new Date(file.timestamp * 1000).toISOString()) : file.date;
-                let renameBtn = isManual && {{ can('backups.create') | tojson }} ? `<button data-permission="backups.create" class="btn btn-outline" style="padding: 4px 10px; font-size: 0.85rem; border-color: var(--text-muted); color: var(--text-main);" onclick="renameBackup('${serverName}', '${file.filename}')">Rename</button>` : '';
+                const actionArgs = `${escapeBackupLabel(JSON.stringify(serverName))}, ${escapeBackupLabel(JSON.stringify(file.filename))}`;
+                const downloadUrl = escapeBackupLabel(JSON.stringify(`/api/backup/download/${encodeURIComponent(serverName)}/${encodeURIComponent(file.filename)}`));
+                let renameBtn = isManual && {{ can('backups.create') | tojson }} ? `<button data-permission="backups.create" class="btn btn-outline" style="padding: 4px 10px; font-size: 0.85rem; border-color: var(--text-muted); color: var(--text-main);" onclick="renameBackup(${actionArgs})">Rename</button>` : '';
                 let isInitial = file.filename.toLowerCase().includes('initialbackup');
                 let badge = isInitial ? ` <span style="font-size: 10px; background: var(--accent); color: white; padding: 2px 6px; border-radius: 8px; margin-left: 8px; vertical-align: middle;">Initial</span>` : '';
                 
@@ -251,7 +253,7 @@
                 <tr class="roster-row">
                     <td class="fw-bold font-mono">
                         <div style="display: flex; align-items: center;">
-                            ${file.filename}${badge}
+                            ${escapeBackupLabel(file.filename)}${badge}
                         </div>
                     </td>
                     <td class="text-sm">${timeStr}</td>
@@ -260,11 +262,11 @@
                         <div style="display: flex; gap: 8px;">
                             ${renameBtn}
                             {% if can('backups.restore') %}
-                            <button data-permission="backups.restore" class="btn btn-start" style="padding: 4px 10px; font-size: 0.85rem;" onclick="restoreBackup('${serverName}', '${file.filename}')">Restore</button>
+                            <button data-permission="backups.restore" class="btn btn-start" style="padding: 4px 10px; font-size: 0.85rem;" onclick="restoreBackup(${actionArgs})">Restore</button>
                             {% endif %}
                             {% if can('backups.create') %}
-                            <button class="btn btn-outline" style="padding: 4px 10px; font-size: 0.85rem; border-color: var(--text-muted); color: var(--text-main);" onclick="window.location.href='/api/backup/download/${encodeURIComponent(serverName)}/${encodeURIComponent(file.filename)}'">Download</button>
-                            <button class="btn btn-stop" style="padding: 4px 10px; font-size: 0.85rem;" onclick="deleteBackup('${serverName}', '${file.filename}')">Delete</button>
+                            <button class="btn btn-outline" style="padding: 4px 10px; font-size: 0.85rem; border-color: var(--text-muted); color: var(--text-main);" onclick="window.location.href=${downloadUrl}">Download</button>
+                            <button class="btn btn-stop" style="padding: 4px 10px; font-size: 0.85rem;" onclick="deleteBackup(${actionArgs})">Delete</button>
                             {% endif %}
                         </div>
                     </td>
@@ -300,7 +302,7 @@
                 
                 let inputHTML = '';
                 if (isInput) {
-                    inputHTML = `<input type="text" id="modal-input-field" value="${inputValue}" style="width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-dark); color: var(--text-main); margin-top: 16px; font-size: 0.9rem;">`;
+                    inputHTML = `<input type="text" id="modal-input-field" aria-label="Backup name" style="width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-dark); color: var(--text-main); margin: 0 0 16px; font-size: 0.9rem;">`;
                     if (!customButtons) {
                         actionsHTML = `
                             <button id="modal-btn-yes" class="btn btn-primary" style="margin: 0;">Save</button>
@@ -324,18 +326,32 @@
 
                 if (customButtons && Array.isArray(customButtons)) {
                     customButtons.forEach(btn => {
-                        document.getElementById(`modal-btn-${btn.id}`).onclick = () => { overlay.remove(); resolve(btn.id); };
+                        overlay.querySelector(`#modal-btn-${btn.id}`).onclick = () => { overlay.remove(); resolve(btn.id); };
                     });
                 } else if (isConfirm || isInput) {
-                    document.getElementById('modal-btn-no').onclick = () => { overlay.remove(); resolve(false); };
-                    document.getElementById('modal-btn-yes').onclick = () => { 
-                        let val = isInput ? document.getElementById('modal-input-field').value : true;
+                    overlay.querySelector('#modal-btn-no').onclick = () => { overlay.remove(); resolve(false); };
+                    overlay.querySelector('#modal-btn-yes').onclick = () => {
+                        let val = isInput ? overlay.querySelector('#modal-input-field').value : true;
                         overlay.remove(); 
                         resolve(val); 
                     };
 
                 } else if (!showProgress) {
-                    document.getElementById('modal-btn-yes').onclick = () => { overlay.remove(); resolve(true); };
+                    overlay.querySelector('#modal-btn-yes').onclick = () => { overlay.remove(); resolve(true); };
+                }
+
+                if (isInput) {
+                    const input = overlay.querySelector('#modal-input-field');
+                    input.value = inputValue;
+                    input.focus();
+                    input.select();
+                    input.addEventListener('keydown', event => {
+                        if (event.isComposing) return;
+                        if (event.key === 'Enter' || event.key === 'Escape') {
+                            event.preventDefault();
+                            overlay.querySelector(event.key === 'Enter' ? '#modal-btn-yes' : '#modal-btn-no').click();
+                        }
+                    });
                 }
                 
                 // Expose methods for progress modal
@@ -372,9 +388,11 @@
         }
 
         async function renameBackup(serverName, oldName) {
-            let newName = await showModal("Rename Backup", "Enter new name for this backup (excluding .zip extension):", false, false, false, true, oldName.replace('.zip', ''));
+            const oldBaseName = oldName.replace(/\.zip$/i, '');
+            let newName = await showModal("Rename Backup", "Enter new name for this backup (excluding .zip extension):", false, false, false, null, true, oldBaseName);
             if (!newName) return;
-            if (newName === oldName.replace('.zip', '')) return;
+            newName = newName.trim();
+            if (!newName || newName === oldBaseName || newName === oldName) return;
             
             try {
                 let formData = new FormData();
@@ -385,13 +403,13 @@
                 let res = await fetch('/api/backup/rename', { method: 'POST', body: formData });
                 let data = await res.json();
                 
-                if (data.status === 'success') {
-                    fetchBackups();
+                if (res.ok && data.status === 'success') {
+                    await fetchBackups();
                 } else {
-                    await showModal("Error", data.message);
+                    await showModal("Error", escapeBackupLabel(data.message || "Unable to rename this backup. Refresh the page and try again."));
                 }
             } catch(e) {
-                await showModal("Error", "Request failed.");
+                await showModal("Error", "Unable to confirm the rename. Refresh the backup list before trying again.");
             }
         }
         
@@ -420,7 +438,7 @@
 
             let backupChoice = await showModal(
                 "Restore Backup", 
-                `Restore ${filename}?<br><br>This will WIPE current server data, keep the original owner and your account with existing permissions, remove other panel users, and revoke old sessions. Ownership will not change.<br><br>{% if can('backups.create') %}Would you like to back up the current state first?{% else %}You cannot create a safety backup. Ask a backup manager to create one first if needed.{% endif %}`,
+                `Restore ${escapeBackupLabel(filename)}?<br><br>This will WIPE current server data, keep the original owner and your account with existing permissions, remove other panel users, and revoke old sessions. Ownership will not change.<br><br>{% if can('backups.create') %}Would you like to back up the current state first?{% else %}You cannot create a safety backup. Ask a backup manager to create one first if needed.{% endif %}`,
                 false, false, false,
                 [
                     {% if can('backups.create') %}
@@ -473,7 +491,7 @@
         }
         
         async function deleteBackup(serverName, filename) {
-            let confirmDel = await showModal("Delete Backup", `Are you sure you want to delete ${filename}?`, true, false, true);
+            let confirmDel = await showModal("Delete Backup", `Are you sure you want to delete ${escapeBackupLabel(filename)}?`, true, false, true);
             if(!confirmDel) return;
             try {
                 let res = await fetch('/api/backup/delete', {

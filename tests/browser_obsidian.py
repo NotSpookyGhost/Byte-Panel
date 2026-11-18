@@ -81,7 +81,7 @@ def main():
 
         @app.before_request
         def prevent_operational_writes():
-            if request.method not in ('GET', 'HEAD', 'OPTIONS') and request.path not in ('/login', '/settings') and not request.path.startswith('/api/plugins/'):
+            if request.method not in ('GET', 'HEAD', 'OPTIONS') and request.path not in ('/login', '/settings', '/api/backup/rename') and not request.path.startswith('/api/plugins/'):
                 abort(418)
 
         server = make_server('127.0.0.1', 0, app, threaded=True, request_handler=QuietHandler)
@@ -131,6 +131,42 @@ def main():
             command_input.fill('   ')
             command_input.press('Enter')
             check(len(submitted_commands) == 5, 'Console ignores blank input')
+            draft = 'say Unfinished draft'
+            command_input.fill(draft)
+            for command in reversed(submitted_commands):
+                command_input.press('ArrowUp')
+                check(command_input.input_value() == command, 'Up recalls older submitted commands')
+                check(command_input.evaluate('(el) => el.selectionStart === el.value.length && el.selectionEnd === el.value.length'),
+                      'Recalled command caret sits at the end')
+            command_input.press('ArrowUp')
+            check(command_input.input_value() == 'help', 'History stops at the oldest entry')
+            for command in submitted_commands[1:] + [draft]:
+                command_input.press('ArrowDown')
+                check(command_input.input_value() == command, 'Down recalls newer entries and restores the draft')
+            command_input.press('ArrowDown')
+            check(command_input.input_value() == draft, 'Down past newest preserves the draft')
+            check(len(submitted_commands) == 5, 'History navigation never sends commands')
+            command_input.press('ArrowUp')
+            page.screenshot(path=str(artifacts / 'console-history-desktop.png'))
+            command_input.fill('say Edited recalled command')
+            with page.expect_response('**/api/command'):
+                command_input.press('Enter')
+            check(submitted_commands[-1] == 'say Edited recalled command', 'Edited recall sends only on Enter')
+            check(command_input.input_value() == '', 'Sending a recalled command clears the input')
+            for command in ('say Edited recalled command', 'say https://example.com/a/b', '//wand'):
+                command_input.press('ArrowUp')
+                check(command_input.input_value() == command, 'Editing recalled text does not mutate older entries')
+            page.set_viewport_size({'width':390,'height':844})
+            command_input.press('ArrowDown')
+            check(command_input.input_value() == 'say https://example.com/a/b', 'History navigation works at mobile width')
+            check(not page.evaluate('document.documentElement.scrollWidth > innerWidth'), 'Console history fits mobile layout')
+            page.screenshot(path=str(artifacts / 'console-history-mobile.png'))
+            page.set_viewport_size({'width':1440,'height':1000})
+            page.reload()
+            command_input.fill(draft)
+            command_input.press('ArrowUp')
+            check(command_input.input_value() == draft, 'Page reload clears private command history')
+            check(len(submitted_commands) == 6, 'Arrow navigation never submits a command after refresh')
             page.unroute('**/api/command', capture_command)
             paths = ['overview','console','logs','players','plugins','properties','backups','settings','users','account']
             for width, height in [(1440,1000),(900,900),(390,844)]:
@@ -214,6 +250,59 @@ def main():
             check(page.locator('.sidebar-brand .brand-logo').count() == 0, 'Panel does not use uploaded server icon')
             page.screenshot(path=str(artifacts / 'backups-custom-logo.png'))
             check(active_backup.read_bytes() == active_bytes and other_backup.read_bytes() == other_bytes, 'Existing backup bytes unchanged')
+            # Exercise real rename requests on disposable archives, never live backups.
+            rename_requests = []
+            page.on('request', lambda req: rename_requests.append(req) if req.url.endswith('/api/backup/rename') else None)
+            for width, key in ((1440, None), (390, 'Enter')):
+                page.set_viewport_size({'width': width, 'height': 1000 if width == 1440 else 844})
+                row = page.locator('.roster-row').filter(has_text=active_backup.name)
+                row.get_by_role('button', name='Rename', exact=True).click()
+                entry = page.get_by_role('textbox', name='Backup name', exact=True)
+                check(entry.input_value() == active_backup.stem, 'Rename pre-fills the current archive name')
+                check(entry.evaluate('(el) => el === document.activeElement'), 'Rename input receives focus')
+                new_base = "Builder's & friends " + str(width)
+                entry.fill(new_base)
+                page.screenshot(path=str(artifacts / f'backup-rename-{width}.png'))
+                with page.expect_response('**/api/backup/rename') as response:
+                    if key:
+                        entry.press(key)
+                    else:
+                        page.get_by_role('button', name='Save', exact=True).click()
+                check(response.value.json()['status'] == 'success', 'Rename endpoint reports success')
+                renamed_backup = active_backup.with_name(new_base + '.zip')
+                page.wait_for_function("name => document.getElementById('backups-container').textContent.includes(name)", arg=renamed_backup.name)
+                check(page.locator('.modal-overlay').count() == 0, 'Successful rename closes the dialog')
+                check(not active_backup.exists(), 'Successful rename removes the old filename')
+                check(renamed_backup.read_bytes() == active_bytes, 'Rename preserves every archive byte')
+                check(other_backup.read_bytes() == other_bytes, 'Rename leaves other server archives untouched')
+                active_backup = renamed_backup
+                count_before_cancel = len(rename_requests)
+                for action in ('cancel', 'escape', 'unchanged', 'blank'):
+                    page.locator('.roster-row').filter(has_text=active_backup.name).get_by_role('button', name='Rename', exact=True).click()
+                    check(entry.input_value() == new_base, 'Renamed punctuation survives reopening the dialog')
+                    if action == 'cancel':
+                        entry.fill('Do not save')
+                        page.get_by_role('button', name='Cancel', exact=True).click()
+                    elif action == 'escape':
+                        entry.press('Escape')
+                    else:
+                        if action == 'blank':
+                            entry.fill('   ')
+                        page.get_by_role('button', name='Save', exact=True).click()
+                    page.wait_for_function("!document.querySelector('.modal-overlay')")
+                check(len(rename_requests) == count_before_cancel, 'Cancelled, blank and unchanged names do not submit')
+            # An existing filename shows a dismissible error and never overwrites data.
+            collision = active_backup.with_name('Existing backup.zip')
+            collision.write_bytes(b'disposable existing archive')
+            page.locator('.roster-row').filter(has_text=active_backup.name).get_by_role('button', name='Rename', exact=True).click()
+            page.get_by_role('textbox', name='Backup name', exact=True).fill(collision.stem)
+            page.get_by_role('button', name='Save', exact=True).click()
+            page.wait_for_function("document.getElementById('modal-msg-text')?.textContent.includes('already exists')")
+            check(page.locator('.modal-overlay').count() == 1, 'Only the error dialog remains after rejected rename')
+            page.get_by_role('button', name='Okay', exact=True).click()
+            check(active_backup.read_bytes() == active_bytes, 'Rejected rename preserves source archive')
+            check(collision.read_bytes() == b'disposable existing archive', 'Rejected rename preserves destination archive')
+            page.set_viewport_size({'width':1440,'height':1000})
             # Upload through General, using the real form and decoder (temporary data only).
             page.goto(base + '/settings')
             page.locator('[data-settings-tab=general]').click()
@@ -305,11 +394,30 @@ def main():
             check(fixture.module.load_config()['backup_shutdown'] is False, 'Shutdown backup option can be disabled')
             page.set_viewport_size({'width':1440,'height':1000})
             page.locator('[data-settings-tab=general]').click()
+            check(page.locator('#settings-general #bluemapEnabled').count() == 0, 'BlueMap is no longer in General')
+            check(page.locator('#settings-addons #bluemapEnabled').count() == 1, 'BlueMap controls belong to Addons')
+            page.locator('[data-settings-tab=backups]').focus()
+            page.locator('[data-settings-tab=backups]').press('ArrowRight')
+            check(page.locator('#settings-addons').is_visible(), 'Keyboard navigation opens Addons')
+            check(page.locator('[data-settings-tab=addons]').get_attribute('aria-selected') == 'true', 'Addons tab is selected accessibly')
+            check(page.locator('#settingsForm button[type=submit]').is_visible(), 'Addons uses the normal Save Settings button')
+            # Invalid controls in a hidden Addons panel must reveal their tab, not submit.
+            saved_map_port = fixture.module.load_config()['bluemap_port']
+            page.locator('#bluemapPort').fill('80')
+            page.locator('[data-settings-tab=general]').click()
+            page.locator('#settingsForm button[type=submit]').click()
+            check(page.locator('#settings-addons').is_visible(), 'Validation reveals Addons when its port is invalid')
+            check(fixture.module.load_config()['bluemap_port'] == saved_map_port, 'Invalid Addons port does not change saved settings')
+            page.locator('#btnRevertChanges').click()
+            check(page.locator('#bluemapPort').input_value() == str(saved_map_port), 'Revert restores saved Addons settings')
             # Enable BlueMap using its disposable loopback upstream; map is public.
             page.locator('#bluemapPort').fill(str(MapFixture.upstream.server_port))
             page.locator('#bluemapEnabled').check()
             page.locator('#settingsForm button[type=submit]').click()
             page.wait_for_load_state()
+            check(page.locator('#settings-addons').is_visible(), 'Addons selection persists after saving')
+            check(page.locator('#bluemapEnabled').is_checked(), 'BlueMap enable setting persists in Addons')
+            check(page.locator('#bluemapPort').input_value() == str(MapFixture.upstream.server_port), 'BlueMap port persists in Addons')
             check(page.locator('nav a[href="/map/"]').count() == 1, 'Map navigation appears after enabling')
             public_map_context = browser.new_context()
             map_page = public_map_context.new_page()
@@ -320,10 +428,14 @@ def main():
             check(map_page.evaluate("fetch('maps/world/live/players.json').then(r => r.json()).then(data => Array.isArray(data.players))"), 'Relative BlueMap live-data URL works')
             public_map_context.close()
             page.screenshot(path=str(artifacts / 'bluemap-settings.png'))
+            page.set_viewport_size({'width':390,'height':844})
+            check(not page.evaluate('document.documentElement.scrollWidth > innerWidth'), 'Addons settings fit mobile')
+            page.screenshot(path=str(artifacts / 'addons-settings-mobile.png'))
+            page.set_viewport_size({'width':1440,'height':1000})
             # Exercise all Settings sections and persist every accent using the real form.
             for accent in ('lime','yellow','blue'):
                 page.goto(base + '/settings')
-                for key in ('general','runtime','backups','appearance','email','operations'):
+                for key in ('general','runtime','backups','addons','appearance','email','operations'):
                     page.locator('[data-settings-tab=' + key + ']').click()
                     check(page.locator('#settings-' + key).is_visible(), 'Settings panel ' + key)
                 page.locator('[data-settings-tab=appearance]').click()
@@ -331,6 +443,8 @@ def main():
                 page.locator('#settingsForm button[type=submit]').click()
                 page.wait_for_load_state()
                 check(fixture.module.load_config()['accent'] == accent, 'Saved accent ' + accent)
+                check(fixture.module.load_config()['bluemap_enabled'] is True, 'Saving another section preserves BlueMap enablement')
+                check(fixture.module.load_config()['bluemap_port'] == MapFixture.upstream.server_port, 'Saving another section preserves BlueMap port')
                 page.goto(base + '/overview')
                 check(page.locator('body').get_attribute('data-accent') == accent, 'Persisted accent ' + accent)
                 for status, state in [('Online','online'),('Restarting','transition'),('Offline','offline'),('Status unavailable','unknown')]:

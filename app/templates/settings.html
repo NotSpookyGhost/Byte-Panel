@@ -26,11 +26,11 @@
         <main class="main-layout">
         {% include 'panel_header.html' %}
         <div class="main-content" id="panel-content" tabindex="-1">
-            <p class="settings-intro">Configure your server, appearance and notifications. Changes are saved together, except SMTP which has its own Save button.</p>
+            <p class="settings-intro">Configure your server, addons, appearance and notifications. Changes are saved together, except SMTP which has its own Save button.</p>
             {% if settings_error %}<p class="accounts-message" role="alert">{{ settings_error }}</p>{% endif %}
             {% if request.method == 'POST' and not settings_error %}<p class="accounts-message" role="status">{{ settings_message or 'Settings saved.' }}</p>{% endif %}
             <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
-                {% for key, label in [('general','General'),('runtime','Runtime'),('backups','Backups'),('appearance','Appearance'),('email','Email'),('operations','Operations')] %}
+                {% for key, label in [('general','General'),('runtime','Runtime'),('backups','Backups'),('addons','Addons'),('appearance','Appearance'),('email','Email'),('operations','Operations')] %}
                 <button type="button" class="settings-tab" id="settings-tab-{{ key }}" role="tab" aria-controls="settings-{{ key }}" aria-selected="{{ 'true' if loop.first else 'false' }}" data-settings-tab="{{ key }}">{{ label }}</button>
                 {% endfor %}
             </nav>
@@ -57,16 +57,6 @@
                             {% if has_custom.server_icon %}<img class="server-icon-preview" src="/branding-assets/server-icon.png" alt="Current server icon" width="64" height="64">{% endif %}
                             <input type="file" name="server_icon" id="serverIconInput" accept="image/png,image/jpeg,image/webp" aria-describedby="serverIconHelp">
                             <p class="field-help" id="serverIconHelp">Used on the sign-in screen, in welcome emails, in the sidebar's server badge and Minecraft's multiplayer server list. Byte Panel's top-left navigation logo does not change. Upload a PNG, JPEG or WebP up to 5 MiB and 16 million pixels. Byte Panel fits it inside a 64 &times; 64 PNG with transparent padding, without stretching or cropping. Save changes, then restart Minecraft and refresh the multiplayer list.</p>
-                        </div>
-                        <div class="server-icon-setting">
-                            <h3>BlueMap</h3>
-                            <input type="hidden" name="bluemap_settings_present" value="1">
-                            <label class="bluemap-toggle" for="bluemapEnabled"><input type="checkbox" id="bluemapEnabled" name="bluemap_enabled" value="true" {% if config.get('bluemap_enabled') %}checked{% endif %}> Enable public map at /map</label>
-                            <p class="field-help">Anyone with the map URL can view the world and BlueMap's visible player locations without a panel account. Panel management still requires sign-in.</p>
-                            <label class="field-label" for="bluemapPort">BlueMap internal port</label>
-                            <input type="number" id="bluemapPort" name="bluemap_port" min="1024" max="65535" value="{{ config.get('bluemap_port', 8100) }}" required aria-describedby="bluemapHelp">
-                            <p class="field-help" id="bluemapHelp">Install the compatible BlueMap plugin/mod and enable its webserver in this Minecraft container. Match its port here (default 8100; panel port 5000 cannot be used). The panel connects internally to 127.0.0.1, so no extra Docker port or Cloudflare hostname is needed. Save changes, then open your panel URL with /map.</p>
-                            {% if config.get('bluemap_enabled') %}<a href="/map/" class="btn btn-outline" target="_blank" rel="noopener">Open map</a>{% endif %}
                         </div>
                     </section>
                     
@@ -174,6 +164,21 @@
                         <div style="margin-bottom: 16px;">
                             <label style="display: block; margin-bottom: 8px; font-weight: 600;">Max Auto Backups to Keep</label>
                             <input type="number" name="auto_backup_keep" value="{{ config.get('auto_backup_keep', 5) }}" min="1" max="50">
+                        </div>
+                    </section>
+
+                    <section class="settings-section" id="settings-addons" data-settings-panel="addons" role="tabpanel" aria-labelledby="settings-tab-addons">
+                        <h2>Addons</h2>
+                        <p class="settings-intro">Configure integrations with Minecraft plugins and mods.</p>
+                        <div class="server-icon-setting">
+                            <h3>BlueMap</h3>
+                            <input type="hidden" name="bluemap_settings_present" value="1">
+                            <label class="bluemap-toggle" for="bluemapEnabled"><input type="checkbox" id="bluemapEnabled" name="bluemap_enabled" value="true" {% if config.get('bluemap_enabled') %}checked{% endif %}> Enable public map at /map</label>
+                            <p class="field-help">Anyone with the map URL can view the world and BlueMap's visible player locations without a panel account. Panel management still requires sign-in.</p>
+                            <label class="field-label" for="bluemapPort">BlueMap internal port</label>
+                            <input type="number" id="bluemapPort" name="bluemap_port" min="1024" max="65535" value="{{ config.get('bluemap_port', 8100) }}" required aria-describedby="bluemapHelp">
+                            <p class="field-help" id="bluemapHelp">Install the compatible BlueMap plugin/mod and enable its webserver in this Minecraft container. Match its port here (default 8100; panel port 5000 cannot be used). The panel connects internally to 127.0.0.1, so no extra Docker port or Cloudflare hostname is needed. Save changes, then open your panel URL with /map.</p>
+                            {% if config.get('bluemap_enabled') %}<a href="/map/" class="btn btn-outline" target="_blank" rel="noopener">Open map</a>{% endif %}
                         </div>
                     </section>
 

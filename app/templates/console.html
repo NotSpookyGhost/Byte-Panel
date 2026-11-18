@@ -32,9 +32,11 @@
             </div>
             
             <div style="display: flex; gap: 10px; margin-top: 15px; max-width: 600px; margin-left: auto; margin-right: auto;">
-                <input data-permission="console.command" type="text" id="commandInput" aria-label="Server command" placeholder="Command (no / needed; e.g. help or plugins)"
+                <input data-permission="console.command" type="text" id="commandInput" aria-label="Server command" placeholder="Command (no / needed; ↑/↓ history)"
+                    title="Up/Down arrows recall the last 100 commands from this page. Enter or Send runs the selected command."
+                    autocomplete="off" spellcheck="false"
                     style="flex-grow: 1; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-main);"
-                    onkeydown="if(event.key === 'Enter') sendCommand()">
+                    onkeydown="handleCommandKeydown(event)">
                 <button data-permission="console.command" class="btn btn-start" onclick="sendCommand()">Send</button>
             </div>
         </div>
@@ -43,11 +45,54 @@
             const configTz = "{{ config.get('timezone', 'UTC') }}";
             const configTimeFormat = "{{ config.get('time_format', '12') }}";
 
+            // Keep command history private to this console page, never in browser storage.
+            const COMMAND_HISTORY_LIMIT = 100;
+            const commandHistory = [];
+            let commandHistoryIndex = 0;
+            let commandDraft = '';
+
+            function rememberCommand(command) {
+                if (commandHistory[commandHistory.length - 1] !== command) {
+                    commandHistory.push(command);
+                    if (commandHistory.length > COMMAND_HISTORY_LIMIT) commandHistory.shift();
+                }
+                commandHistoryIndex = commandHistory.length;
+                commandDraft = '';
+            }
+
+            function handleCommandKeydown(event) {
+                const input = document.getElementById('commandInput');
+                if (input.disabled || input.readOnly || event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
+                    event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    if (!event.repeat) sendCommand();
+                    return;
+                }
+                if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+                if (!commandHistory.length) return;
+                event.preventDefault();
+                if (event.key === 'ArrowUp') {
+                    if (commandHistoryIndex === 0) return;
+                    if (commandHistoryIndex === commandHistory.length) commandDraft = input.value;
+                    commandHistoryIndex -= 1;
+                } else {
+                    if (commandHistoryIndex === commandHistory.length) return;
+                    commandHistoryIndex += 1;
+                }
+                input.value = commandHistoryIndex === commandHistory.length
+                    ? commandDraft : commandHistory[commandHistoryIndex];
+                input.setSelectionRange(input.value.length, input.value.length);
+            }
+
             function sendCommand() {
                 const input = document.getElementById('commandInput');
+                if (input.disabled || input.readOnly) return;
                 const commandText = input.value.trim();
                 
                 if (commandText !== '') {
+                    // Remember attempts too, so a failed command can be recalled and edited.
+                    rememberCommand(commandText);
                     fetch('/api/command', {
                         method: 'POST',
                         headers: {
@@ -66,6 +111,7 @@
                     });
                     
                     input.value = '';
+                    input.focus();
                 }
             }
             function showToast(message, actionColor) {
