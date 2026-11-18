@@ -1,6 +1,7 @@
 """Central HTTP/WebSocket authorization and account/SMTP API routes."""
 
 import secrets
+from pathlib import Path
 import sqlite3
 import threading
 import time
@@ -10,6 +11,7 @@ from flask import Blueprint, g, jsonify, redirect, render_template, request, ses
 from panel_accounts import (AccountStore, PERMISSIONS, grants, session_grants, persistent_secret,
                             PASSWORD_RULES, PASSWORD_REQUIREMENTS, PASSWORD_PATTERN)
 from panel_mail import PanelMailer, PasswordEmailDeliveryError, smtp_failure
+from bluemap import MAP_ENDPOINTS
 
 
 ROUTE_PERMISSIONS = {
@@ -44,7 +46,7 @@ class PanelSecurity:
     def __init__(self, app, data_dir, load_config, save_config, get_assets):
         self.app = app
         self.store = AccountStore(data_dir)
-        self.mailer = PanelMailer(self.store, load_config)
+        self.mailer = PanelMailer(self.store, load_config, server_dir=Path(data_dir) / 'server')
         self.load_config = load_config
         self.get_assets = get_assets
         self.failures = {}
@@ -86,6 +88,10 @@ class PanelSecurity:
 
     def authorize(self):
         endpoint = request.endpoint
+        # Only BlueMap's GET/HEAD routes are public; each checks setup/enabled
+        # state. Do not read or forward panel sessions to the map webserver.
+        if endpoint in MAP_ENDPOINTS:
+            return None
         if endpoint in ('static', 'serve_custom_branding') or endpoint is None:
             return None
         g.panel_user = self.current_user()

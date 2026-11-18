@@ -141,6 +141,40 @@ class SMTPProtocolTests(unittest.TestCase):
         self.assertEqual(message.get_body(preferencelist=('html',)).get_content().replace('\r\n', '\n'), html)
         self.assertFalse(message.defects)
 
+    def test_inline_server_icon_survives_smtp_as_related_html_content(self):
+        from test_server_icon import image_bytes
+        icon = image_bytes(size=(64, 64))
+        cid = 'test-server-icon@byte-panel.local'
+        html = f'<h2>Welcome</h2><img src="cid:{cid}" width="64" height="64">\n'
+        with scripted_transport(PREFIX + ACCEPTED + QUIT_OK) as (wire, *unused):
+            self.mailer.send('recipient@example.com', 'Welcome with icon', 'Welcome\n',
+                             html=html, inline_images={cid: icon})
+        payload = next(line for line in wire.commands if line.startswith(b'From:'))
+        message = BytesParser(policy=email_policy).parsebytes(payload)
+        self.assertEqual(message.get_content_type(), 'multipart/alternative')
+        self.assertEqual([part.get_content_type() for part in message.iter_parts()],
+                         ['text/plain', 'multipart/related'])
+        self.assertEqual(message.get_body(preferencelist=('html',)).get_content().replace('\r\n', '\n'), html)
+        related = list(message.iter_parts())[1]
+        self.assertEqual([part.get_content_type() for part in related.iter_parts()], ['text/html', 'image/png'])
+        image = list(related.iter_parts())[1]
+        self.assertEqual(image['Content-ID'], '<' + cid + '>')
+        self.assertEqual(image.get_content_disposition(), 'inline')
+        self.assertEqual(image.get_payload(decode=True), icon)
+        self.assertFalse(any(part.defects for part in message.walk()))
+
+    def test_invalid_inline_image_headers_are_rejected_before_smtp(self):
+        from test_server_icon import image_bytes
+        icon = image_bytes(size=(64, 64))
+        with patch('panel_mail.smtplib.SMTP') as smtp:
+            for cid in ('bad\r\nBcc: victim@example.com', '<bad>', 'bad:cid', ''):
+                with self.subTest(cid=repr(cid)), self.assertRaises(ValueError):
+                    self.mailer.send('recipient@example.com', 'Test', 'Text', html='<p>Text</p>',
+                                     inline_images={cid: icon})
+            with self.assertRaises(ValueError):
+                self.mailer.send('recipient@example.com', 'Test', 'Text', inline_images={'safe': icon})
+            smtp.assert_not_called()
+
     def test_implicit_tls_does_not_issue_starttls(self):
         self.store.values.update(security='ssl', port=465)
         with scripted_transport(BANNER + EHLO_AUTH + ACCEPTED + QUIT_OK) as (wire, connect, context, wrap):

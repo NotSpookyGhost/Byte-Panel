@@ -1,6 +1,7 @@
 """SMTP delivery using the Python standard library; credentials never leave the server."""
 
 from email.message import EmailMessage
+from io import BytesIO
 from contextlib import suppress
 from datetime import datetime, timezone
 from email.utils import formataddr, formatdate, make_msgid
@@ -15,6 +16,7 @@ from urllib.parse import urlsplit
 
 from panel_accounts import validate_email
 from email_designs import EmailTemplateError, load_email_design, render_email_text
+from server_icon import server_icon_path, normalize_icon, ServerIconError
 
 
 DEFAULT_SMTP = dict(enabled=False, notify_new_users=True, host='', port=587,
@@ -28,6 +30,7 @@ EMAIL_DESIGNS = Path(__file__).resolve().parent.parent / 'templates'
 WELCOME_DESIGN = EMAIL_DESIGNS / 'welcomeTemplate.json'
 PASSWORD_DESIGN = EMAIL_DESIGNS / 'passwordTemplate.json'
 PASSWORD_EMAIL_DELAY_SECONDS = 12
+MAX_EMAIL_ICON_BYTES = 256 * 1024
 SMTP_STAGES = {
     'connect': 'connecting and waiting for the SMTP greeting',
     'connect_tls': 'connecting with SSL/TLS and waiting for the SMTP greeting',
@@ -182,9 +185,27 @@ def _smtp_ehlo(smtp):
 
 
 class PanelMailer:
-    def __init__(self, store, load_panel_config=None):
+    def __init__(self, store, load_panel_config=None, server_dir=None):
         self.store = store
         self.load_panel_config = load_panel_config or (lambda: {})
+        self.server_dir = server_dir
+
+    def server_icon_bytes(self):
+        """An optional, bounded copy of the active icon, without imported metadata."""
+        if self.server_dir is None:
+            return None
+        try:
+            path = server_icon_path(self.server_dir)
+            if path is None:
+                return None
+            with path.open('rb') as stream:
+                raw = stream.read(MAX_EMAIL_ICON_BYTES + 1)
+            if len(raw) > MAX_EMAIL_ICON_BYTES or not raw.startswith(b'\x89PNG\r\n\x1a\n'):
+                return None
+            return normalize_icon(BytesIO(raw))
+        except (OSError, ServerIconError):
+            # Missing, unreadable or malformed optional artwork must not block invites.
+            return None
 
     def panel_name(self):
         return 'Byte Panel'
@@ -249,7 +270,7 @@ class PanelMailer:
         self.store.set_setting('smtp', config)
         return self.config(public=True)
 
-    def send(self, recipient, subject, text, *, html=None):
+    def send(self, recipient, subject, text, *, html=None, inline_images=None):
         config = self.config()
         if not config['enabled']:
             raise ValueError('Enable and save SMTP settings first.')
@@ -263,6 +284,17 @@ class PanelMailer:
         message.set_content(text)
         if html is not None:
             message.add_alternative(html, subtype='html')
+        if inline_images:
+            if html is None:
+                raise ValueError('Inline email images require an HTML message.')
+            html_part = message.get_body(preferencelist=('html',))
+            for cid, data in inline_images.items():
+                if (not isinstance(cid, str) or not re.fullmatch(r'[A-Za-z0-9._@-]{1,200}', cid) or
+                        not isinstance(data, bytes) or len(data) > MAX_EMAIL_ICON_BYTES or
+                        not data.startswith(b'\x89PNG\r\n\x1a\n')):
+                    raise ValueError('Invalid inline email image.')
+                html_part.add_related(data, maintype='image', subtype='png', cid=f'<{cid}>',
+                                      disposition='inline', filename='server-icon.png')
         smtp = None
         accepted = False
         started = time.monotonic()
@@ -314,21 +346,26 @@ class PanelMailer:
             return 'cancelled'
         expires = datetime.fromtimestamp(user['temporary_password_expires'], timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
         name = self.server_name()
+        icon = self.server_icon_bytes()
+        icon_cid = make_msgid(domain='byte-panel.local')[1:-1] if icon else ''
         values = dict(servername=name, panel_name=self.panel_name(), username=user['username'],
                       login_url=config['panel_url'].rstrip('/') + '/login',
-                      temporary_password='', password='', expires=expires)
+                      temporary_password='', password='', expires=expires,
+                      server_icon='cid:' + icon_cid if icon else '')
         subject = render_email_text('Welcome to {{servername}} - your panel sign-in details', values)
         # Never expose the password to the welcome template, including customized copies.
         # Render both templates first so a missing file cannot leave half an invitation.
-        body = render_email_text(WELCOME_TEMPLATE.read_text(encoding='utf-8'), values)
+        body = render_email_text(WELCOME_TEMPLATE.read_text(encoding='utf-8'), {**values, 'server_icon': ''})
         welcome_html = load_email_design(WELCOME_DESIGN, values)
         password_subject = render_email_text('Your temporary password for {{servername}}', values)
         password_values = {**values, 'temporary_password': temporary_password,
-                           'password': temporary_password}
+                           'password': temporary_password, 'server_icon': ''}
         password_body = render_email_text(PASSWORD_TEMPLATE.read_text(encoding='utf-8'),
                                           password_values)
         password_html = load_email_design(PASSWORD_DESIGN, password_values)
-        self.send(user['email'], subject, body, html=welcome_html)
+        # Do not attach unused artwork when a customized design omits the icon block.
+        inline_images = {icon_cid: icon} if icon and f'src="cid:{icon_cid}"' in welcome_html else None
+        self.send(user['email'], subject, body, html=welcome_html, inline_images=inline_images)
         # Keep the secret only in this request's memory, never in a persistent queue.
         # The threaded server continues serving other requests during this short wait.
         try:

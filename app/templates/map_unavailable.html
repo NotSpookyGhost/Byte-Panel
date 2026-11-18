@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map unavailable - Byte Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='obsidian.css') }}">
+</head>
+<body class="obsidian page-login" data-accent="lime">
+    {% from 'ui_icons.html' import brand %}
+    <main class="login-wrap">
+        <div class="login-brand">{{ brand() }}<span>Byte Panel</span></div>
+        <section class="card login-card"><h1>Map unavailable</h1><p>{{ message }}</p>
+            <a class="btn btn-primary" href="/map/">Try again</a>
+            <a class="btn btn-outline" href="/login">Panel sign in</a>
+        </section>
+    </main>
+</body>
+</html>

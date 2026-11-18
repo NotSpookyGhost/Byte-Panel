@@ -16,16 +16,10 @@ class ServerIconError(ValueError):
     pass
 
 
-def panel_icon_path(server_dir, branding_dir):
-    """Prefer the active server's icon, including icons from imported backups.
-
-    Old panel-only logos remain a display fallback until the user uploads an icon.
-    Never copy that fallback into a newly created or restored Minecraft server.
-    """
-    for path in (Path(server_dir) / 'server-icon.png', Path(branding_dir) / 'logo.png'):
-        if not path.is_symlink() and path.is_file():
-            return path
-    return None
+def server_icon_path(server_dir):
+    """The active server icon is independent of Byte Panel product branding."""
+    path = Path(server_dir) / 'server-icon.png'
+    return path if not path.is_symlink() and path.is_file() else None
 
 
 def normalize_icon(stream):

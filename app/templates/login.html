@@ -2,20 +2,22 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Sign in - Byte Panel</title>
+    <title>Sign in - {{ config.get('server_name') or 'Your Minecraft server' }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="icon" href="{{ '/branding-assets/favicon.ico' if has_custom.favicon else url_for('static', filename='bytedev_logo.png') }}">
     {% include 'panel_access.html' %}
     {% include 'panel_ui.html' %}
 </head>
 <body class="theme-{{ config.theme }} obsidian page-login" data-accent="{{ config.get('accent', 'lime') }}">
-    {% from 'ui_icons.html' import brand %}
+    {% from 'ui_icons.html' import icon %}
     {% if has_custom.bg %}<div class="login-background" style="background-image:url('/branding-assets/bg.jpg')"><div class="login-background-overlay" style="background:rgba(0,0,0,{{ config.get('bg_tint', 50) | float / 100 }});backdrop-filter:blur({{ config.get('bg_blur', 5) }}px)"></div></div>{% endif %}
     <main class="login-wrap">
-        <div class="login-brand">{% if has_custom.logo %}<img class="login-logo" src="/branding-assets/logo.png" alt="">{% else %}{{ brand() }}{% endif %}<span>Byte Panel</span></div>
         <section class="card login-card">
-            <h1>Welcome back</h1>
-            <p>Sign in to manage {{ config.get('server_name') or 'your Minecraft server' }}.</p>
+            <div class="login-server-identity">
+                <span class="login-server-icon" aria-hidden="true">{% if has_custom.server_icon %}<img src="/branding-assets/server-icon.png" alt="" width="40" height="40">{% else %}{{ icon('server') }}{% endif %}</span>
+                <h1>{{ config.get('server_name') or 'Your Minecraft server' }}</h1>
+            </div>
+            <p>Sign in to manage your server.</p>
             {% if error %}<p class="login-error" role="alert">{{ error }}</p>{% endif %}
             <form method="POST">
                 <label for="login-username">Username</label>

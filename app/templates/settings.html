@@ -54,14 +54,36 @@
                         <p class="field-help">Used for server labels, backup grouping and the {{ '{{servername}}' }} email placeholder. Renaming does not move existing backups or change Minecraft's MOTD.</p>
                         <div class="server-icon-setting">
                             <label for="serverIconInput" class="field-label">Server icon</label>
-                            {% if has_custom.logo %}<img class="server-icon-preview" src="/branding-assets/logo.png" alt="Current server icon" width="64" height="64">{% endif %}
+                            {% if has_custom.server_icon %}<img class="server-icon-preview" src="/branding-assets/server-icon.png" alt="Current server icon" width="64" height="64">{% endif %}
                             <input type="file" name="server_icon" id="serverIconInput" accept="image/png,image/jpeg,image/webp" aria-describedby="serverIconHelp">
-                            <p class="field-help" id="serverIconHelp">Used throughout the panel and in Minecraft's multiplayer server list. Upload a PNG, JPEG or WebP up to 5 MiB and 16 million pixels. Byte Panel fits it inside a 64 &times; 64 PNG with transparent padding, without stretching or cropping. Save changes, then restart Minecraft and refresh the multiplayer list.</p>
-                            {% if has_custom.logo and not has_custom.server_icon %}<p class="field-help">Your previous panel logo is shown above. Upload it here once to use it as the Minecraft server icon too.</p>{% endif %}
+                            <p class="field-help" id="serverIconHelp">Used on the sign-in screen, in welcome emails, in the sidebar's server badge and Minecraft's multiplayer server list. Byte Panel's top-left navigation logo does not change. Upload a PNG, JPEG or WebP up to 5 MiB and 16 million pixels. Byte Panel fits it inside a 64 &times; 64 PNG with transparent padding, without stretching or cropping. Save changes, then restart Minecraft and refresh the multiplayer list.</p>
+                        </div>
+                        <div class="server-icon-setting">
+                            <h3>BlueMap</h3>
+                            <input type="hidden" name="bluemap_settings_present" value="1">
+                            <label class="bluemap-toggle" for="bluemapEnabled"><input type="checkbox" id="bluemapEnabled" name="bluemap_enabled" value="true" {% if config.get('bluemap_enabled') %}checked{% endif %}> Enable public map at /map</label>
+                            <p class="field-help">Anyone with the map URL can view the world and BlueMap's visible player locations without a panel account. Panel management still requires sign-in.</p>
+                            <label class="field-label" for="bluemapPort">BlueMap internal port</label>
+                            <input type="number" id="bluemapPort" name="bluemap_port" min="1024" max="65535" value="{{ config.get('bluemap_port', 8100) }}" required aria-describedby="bluemapHelp">
+                            <p class="field-help" id="bluemapHelp">Install the compatible BlueMap plugin/mod and enable its webserver in this Minecraft container. Match its port here (default 8100; panel port 5000 cannot be used). The panel connects internally to 127.0.0.1, so no extra Docker port or Cloudflare hostname is needed. Save changes, then open your panel URL with /map.</p>
+                            {% if config.get('bluemap_enabled') %}<a href="/map/" class="btn btn-outline" target="_blank" rel="noopener">Open map</a>{% endif %}
                         </div>
                     </section>
                     
                     <section class="settings-section" id="settings-runtime" data-settings-panel="runtime" role="tabpanel" aria-labelledby="settings-tab-runtime"><h2>Runtime</h2>
+                        <input type="hidden" name="automation_settings_present" value="true">
+                        <div class="backup-shutdown-setting">
+                            <label class="backup-shutdown-label" for="autoStart">
+                                <input type="checkbox" id="autoStart" name="auto_start" value="true" aria-describedby="autoStartHelp" {% if config.get('auto_start') %}checked{% endif %}>
+                                <span>Automatically start server when Byte Panel starts</span>
+                            </label>
+                            <p class="field-help" id="autoStartHelp">Start this configured Minecraft server once when the panel/container starts. Saving this option does not start Minecraft immediately. Both automatic options are off by default.</p>
+                            <label class="backup-shutdown-label" for="autoRestart">
+                                <input type="checkbox" id="autoRestart" name="auto_restart" value="true" aria-describedby="autoRestartHelp" {% if config.get('auto_restart') %}checked{% endif %}>
+                                <span>Automatically restart server after a crash</span>
+                            </label>
+                            <p class="field-help" id="autoRestartHelp">Restart a panel-managed server after an unexpected non-zero exit, with a 10-second delay. Stop buttons, console stop commands and clean shutdowns stay stopped. Recovery waits for backups and file operations. After 3 restart attempts within 5 minutes, use Start manually after checking the logs.</p>
+                        </div>
                         <div style="margin-top: 16px; margin-bottom: 20px;">
                             <label style="display: block; margin-bottom: 8px; font-weight: 600;">Java Executable Binary Path Override</label>
                             <input type="text" name="java_path" value="{{ config.java_path }}" placeholder="Leave blank for automatic runtime path matching">
@@ -113,7 +135,17 @@
                         
                     </section>
                     
-                    <section class="settings-section" id="settings-backups" data-settings-panel="backups" role="tabpanel" aria-labelledby="settings-tab-backups"><h2>Automatic Backups</h2>
+                    <section class="settings-section" id="settings-backups" data-settings-panel="backups" role="tabpanel" aria-labelledby="settings-tab-backups"><h2>Backups</h2>
+                        <input type="hidden" name="backup_settings_present" value="true">
+                        <div class="backup-shutdown-setting">
+                            <label class="backup-shutdown-label" for="backupShutdown">
+                                <input type="checkbox" id="backupShutdown" name="backup_shutdown" value="true" aria-describedby="backupShutdownHelp" {% if config.get('backup_shutdown') %}checked{% endif %}>
+                                <span>Shut down server during backups</span>
+                            </label>
+                            <p class="field-help" id="backupShutdownHelp">Applies to manual and scheduled backups. Players will be disconnected while Minecraft shuts down, the archive is created and verified, and the server starts again. A server that was already offline stays offline.</p>
+                            <p class="field-help">If shutdown does not finish within 3 minutes, the backup is cancelled without force-killing Minecraft. After a clean shutdown, the panel also attempts to restart if creating the archive fails. Users with backup creation permission can trigger this downtime.</p>
+                        </div>
+                        <h3>Automatic backups</h3>
                         <div style="margin-top: 16px; margin-bottom: 20px;">
                             <label style="display: block; margin-bottom: 8px; font-weight: 600;">Enable Automated Backups</label>
                             <div style="display: flex; align-items: center; gap: 12px;">

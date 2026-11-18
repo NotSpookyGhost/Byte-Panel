@@ -5,6 +5,7 @@ Run with playwright installed and Chrome available:
 No Minecraft process or real email is started.
 """
 import argparse
+import base64
 from contextlib import closing
 import json
 import logging
@@ -21,6 +22,9 @@ from flask import abort, request
 from werkzeug.serving import make_server, WSGIRequestHandler
 from playwright.sync_api import sync_playwright
 from test_accounts import AccountIntegrationTests as Fixture
+from test_bluemap import BlueMapProxyTests as MapFixture
+from email_designs import load_email_design
+from panel_mail import WELCOME_DESIGN
 
 
 class QuietHandler(WSGIRequestHandler):
@@ -42,6 +46,7 @@ def main():
     widths = {}
     errors = []
     server = None
+    MapFixture.setUpClass()
     try:
         fixture.config.update(server_name='Obsidian Realm', server_type='Purpur', ram_gb=8)
         fixture.module.save_config(fixture.config)
@@ -96,11 +101,37 @@ def main():
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.goto(base + '/login')
             check(page.locator('#panel-sidebar').count() == 0, 'Login has no sidebar')
+            check(page.locator('.login-card .login-server-identity h1').inner_text() == 'Obsidian Realm', 'Login heading uses server name')
+            check(page.locator('.login-server-icon svg').count() == 1, 'Login uses server glyph without uploaded icon')
+            check(page.locator('.login-brand').count() == 0, 'Login has no separate product branding row')
             page.screenshot(path=str(artifacts / 'login.png'))
             page.locator('[name=username]').fill('owner')
             page.locator('[name=password]').fill('Owner-password-123')
             page.get_by_role('button', name='Sign in', exact=True).click()
             page.wait_for_url('**/overview')
+            # Browser input accepts bare commands; backend integration tests verify
+            # the engine-specific prefix. Stub transport: never send live commands.
+            submitted_commands = []
+            def capture_command(route):
+                submitted_commands.append(route.request.post_data_json['command'])
+                route.fulfill(status=200, content_type='application/json', body='{"status":"success"}')
+            page.route('**/api/command', capture_command)
+            page.goto(base + '/console')
+            command_input = page.locator('#commandInput')
+            check('no / needed' in command_input.get_attribute('placeholder'), 'Console explains optional slash')
+            for command in ('help', 'plugins', '/help', '//wand', 'say https://example.com/a/b'):
+                command_input.fill(command)
+                with page.expect_response('**/api/command'):
+                    if command == 'help':
+                        command_input.press('Enter')
+                    else:
+                        page.get_by_role('button', name='Send', exact=True).click()
+                check(submitted_commands[-1] == command, 'Console submits command unchanged for backend normalization')
+                check(command_input.input_value() == '', 'Console clears submitted command')
+            command_input.fill('   ')
+            command_input.press('Enter')
+            check(len(submitted_commands) == 5, 'Console ignores blank input')
+            page.unroute('**/api/command', capture_command)
             paths = ['overview','console','logs','players','plugins','properties','backups','settings','users','account']
             for width, height in [(1440,1000),(900,900),(390,844)]:
                 page.set_viewport_size({'width':width,'height':height})
@@ -114,6 +145,12 @@ def main():
                     check(abs(box['width'] - expected) < 1, f'{path}: sidebar width {width}: {box}')
                     overflow = page.evaluate("document.documentElement.scrollWidth > window.innerWidth")
                     check(not overflow, f'{path}: horizontal page overflow at {width}')
+                    check(page.locator('.sidebar-brand .brand-mark path').evaluate('(el) => getComputedStyle(el).stroke') == 'rgb(255, 255, 255)',
+                          f'{path}: product logo stays white at {width}')
+                    version = page.locator('.sidebar-version')
+                    check(version.inner_text() == fixture.module.inject_version()['app_version'], f'{path}: footer contains version only')
+                    check(abs(version.locator('span').bounding_box()['x'] - version.bounding_box()['x'] - 5) < 1,
+                          f'{path}: version sits at bottom-left at {width}')
                     if width == 390:
                         check(page.locator('#panel-sidebar').evaluate('(el) => el.inert'), f'{path}: hidden mobile nav inert')
                         page.locator('#menu-toggle').click()
@@ -141,12 +178,40 @@ def main():
             # Verify the default mark is closed, then render a real configured logo.
             page.goto(base + '/backups')
             check(page.locator('.sidebar-brand .brand-mark path').get_attribute('d').endswith('Z'), 'Default brand mark is closed')
+            # Theme/accent and link interaction states must never recolor the product mark.
+            original_brand_theme = page.locator('body').get_attribute('class')
+            original_brand_accent = page.locator('body').get_attribute('data-accent')
+            for theme in ('dark', 'black', 'light'):
+                for accent in ('lime', 'yellow', 'blue'):
+                    page.evaluate("""([theme, accent]) => {
+                        document.body.classList.remove('theme-dark', 'theme-black', 'theme-light');
+                        document.body.classList.add('theme-' + theme);
+                        document.body.dataset.accent = accent;
+                    }""", [theme, accent])
+                    brand_link = page.locator('.sidebar-brand a')
+                    for state in ('normal', 'hover', 'focus'):
+                        page.mouse.move(500, 500)
+                        brand_link.evaluate('(el) => el.blur()')
+                        if state == 'hover':
+                            brand_link.hover()
+                        elif state == 'focus':
+                            brand_link.focus()
+                        check(page.locator('.sidebar-brand .brand-mark path').evaluate('(el) => getComputedStyle(el).stroke') == 'rgb(255, 255, 255)',
+                              f'Product logo stays white: {theme}/{accent}/{state}')
+                    if accent == 'lime':
+                        brand_link.evaluate('(el) => el.blur()')
+                        page.locator('.sidebar-brand').screenshot(path=str(artifacts / f'white-logo-{theme}.png'))
+            page.evaluate("""([classes, accent]) => {
+                document.body.className = classes;
+                if (accent === null) delete document.body.dataset.accent;
+                else document.body.dataset.accent = accent;
+            }""", [original_brand_theme, original_brand_accent])
             logo = fixture.data / 'branding' / 'logo.png'
             shutil.copyfile(Path(__file__).resolve().parents[1] / 'app' / 'static' / 'bytedev_logo.png', logo)
             page.reload()
-            page.wait_for_function("document.querySelector('.sidebar-brand .brand-logo').naturalWidth > 0")
+            check(page.locator('.sidebar-brand .brand-mark').count() == 1, 'Legacy logo cannot replace panel branding')
             check(page.locator('.sidebar-brand a').get_attribute('href') == '/overview', 'Brand home link')
-            check(page.locator('.sidebar-brand .brand-mark').count() == 0, 'Uploaded logo replaces fallback')
+            check(page.locator('.sidebar-brand .brand-logo').count() == 0, 'Panel does not use uploaded server icon')
             page.screenshot(path=str(artifacts / 'backups-custom-logo.png'))
             check(active_backup.read_bytes() == active_bytes and other_backup.read_bytes() == other_bytes, 'Existing backup bytes unchanged')
             # Upload through General, using the real form and decoder (temporary data only).
@@ -160,14 +225,101 @@ def main():
             check('Restart Minecraft' in page.locator('.main-content > p[role=status]').inner_text(), 'Minecraft restart notice')
             page.wait_for_function("document.querySelector('.server-icon-preview').naturalWidth === 64")
             canonical = (fixture.root / 'server-icon.png').read_bytes()
-            check(context.request.get(base + '/branding-assets/logo.png').body() == canonical, 'Panel serves exact Minecraft icon')
-            check(page.locator('.sidebar-brand .brand-logo').evaluate('(el) => el.naturalWidth') == 64, 'Sidebar uses converted icon')
+            check(context.request.get(base + '/branding-assets/server-icon.png').body() == canonical, 'Panel serves exact Minecraft icon')
+            check(page.locator('.sidebar-brand .brand-mark').count() == 1, 'Panel brand unchanged after server icon upload')
             check(page.locator('.sidebar-server .server-icon img').evaluate('(el) => el.naturalWidth') == 64, 'Server badge uses converted icon')
             page.screenshot(path=str(artifacts / 'server-icon-general.png'))
+            # Offline HTML preview: resolve the email's CID just as a mail client would.
+            # Use the repository banner for remote artwork; no external image requests.
+            email_context = browser.new_context(offline=True, reduced_motion='reduce')
+            email_page = email_context.new_page()
+            artwork = 'data:image/jpeg;base64,' + base64.b64encode((Path(__file__).resolve().parents[1] / 'BP.jpg').read_bytes()).decode()
+            icon_source = 'data:image/png;base64,' + base64.b64encode(canonical).decode()
+            try:
+                for include_icon in (True, False):
+                    email_html = load_email_design(WELCOME_DESIGN, dict(
+                        servername='Obsidian Realm', username='QAPlayer',
+                        login_url='https://panel.example.com/login', server_icon='cid:preview@byte-panel.local' if include_icon else '',
+                        panel_name='Byte Panel', password='', temporary_password='', expires='2030-01-01'))
+                    email_html = email_html.replace('cid:preview@byte-panel.local', icon_source)
+                    for remote in ('https://imgur.com/z8evHHi.jpg', 'https://imgur.com/k0XccP9.jpg'):
+                        email_html = email_html.replace(remote, artwork)
+                    for width in (640, 390):
+                        email_page.set_viewport_size({'width': width, 'height': 1100})
+                        email_page.set_content(email_html)
+                        email_page.locator('img').evaluate_all('(images) => Promise.all(images.map(img => img.decode()))')
+                        icon = email_page.locator('img[src^="data:image/png"]')
+                        check(icon.count() == int(include_icon), 'Welcome email omits missing icon')
+                        if include_icon:
+                            icon_box = icon.bounding_box()
+                            heading = email_page.get_by_role('heading', name='Welcome to Obsidian Realm').bounding_box()
+                            check(icon_box['width'] == 64 and icon_box['height'] == 64, 'Email icon is 64 by 64')
+                            check(icon_box['y'] + icon_box['height'] <= heading['y'], 'Email icon appears above welcome heading')
+                            check(abs(icon_box['x'] + 32 - width / 2) < 1, 'Email icon centered')
+                        check(not email_page.evaluate('document.documentElement.scrollWidth > innerWidth'), 'Welcome email fits viewport')
+                        email_page.screenshot(path=str(artifacts / f'email-welcome-{int(include_icon)}-{width}.png'), full_page=True)
+            finally:
+                email_context.close()
             page.set_viewport_size({'width':390,'height':844})
             check(not page.evaluate('document.documentElement.scrollWidth > innerWidth'), 'Server icon setting fits mobile')
             page.screenshot(path=str(artifacts / 'server-icon-mobile.png'))
             page.set_viewport_size({'width':1440,'height':1000})
+            # Automation is opt-in, independent, and never launches a process on save.
+            page.locator('[data-settings-tab=runtime]').click()
+            check(not page.locator('#autoStart').is_checked(), 'Automatic startup defaults off')
+            check(not page.locator('#autoRestart').is_checked(), 'Crash recovery defaults off')
+            page.locator('#autoStart').check()
+            page.locator('#autoRestart').check()
+            page.locator('#settingsForm button[type=submit]').click()
+            page.wait_for_load_state()
+            page.locator('[data-settings-tab=runtime]').click()
+            check(page.locator('#autoStart').is_checked() and page.locator('#autoRestart').is_checked(), 'Automation settings persist')
+            check(fixture.module.MINECRAFT_PROCESS is None, 'Saving automation does not launch Minecraft')
+            page.screenshot(path=str(artifacts / 'server-automation-desktop.png'))
+            page.set_viewport_size({'width':390,'height':844})
+            check(not page.evaluate('document.documentElement.scrollWidth > innerWidth'), 'Automation settings fit mobile')
+            page.screenshot(path=str(artifacts / 'server-automation-mobile.png'))
+            page.locator('#autoStart').uncheck()
+            page.locator('#autoRestart').uncheck()
+            page.locator('#settingsForm button[type=submit]').click()
+            page.wait_for_load_state()
+            check(fixture.module.load_config()['auto_start'] is False, 'Automatic startup can be disabled')
+            check(fixture.module.load_config()['auto_restart'] is False, 'Crash recovery can be disabled')
+            page.set_viewport_size({'width':1440,'height':1000})
+            # Persist offline-backup mode through its actual settings control.
+            page.locator('[data-settings-tab=backups]').click()
+            check(not page.locator('#backupShutdown').is_checked(), 'Shutdown backups are opt-in')
+            page.locator('#backupShutdown').check()
+            page.locator('#settingsForm button[type=submit]').click()
+            page.wait_for_load_state()
+            page.locator('[data-settings-tab=backups]').click()
+            check(page.locator('#backupShutdown').is_checked(), 'Shutdown backup option persists')
+            check(fixture.module.load_config()['backup_shutdown'] is True, 'Backend saved shutdown backup mode')
+            page.screenshot(path=str(artifacts / 'shutdown-backups-desktop.png'))
+            page.set_viewport_size({'width':390,'height':844})
+            check(not page.evaluate('document.documentElement.scrollWidth > innerWidth'), 'Shutdown backup setting fits mobile')
+            page.screenshot(path=str(artifacts / 'shutdown-backups-mobile.png'))
+            page.locator('#backupShutdown').uncheck()
+            page.locator('#settingsForm button[type=submit]').click()
+            page.wait_for_load_state()
+            check(fixture.module.load_config()['backup_shutdown'] is False, 'Shutdown backup option can be disabled')
+            page.set_viewport_size({'width':1440,'height':1000})
+            page.locator('[data-settings-tab=general]').click()
+            # Enable BlueMap using its disposable loopback upstream; map is public.
+            page.locator('#bluemapPort').fill(str(MapFixture.upstream.server_port))
+            page.locator('#bluemapEnabled').check()
+            page.locator('#settingsForm button[type=submit]').click()
+            page.wait_for_load_state()
+            check(page.locator('nav a[href="/map/"]').count() == 1, 'Map navigation appears after enabling')
+            public_map_context = browser.new_context()
+            map_page = public_map_context.new_page()
+            map_page.goto(base + '/map?world=world')
+            map_page.wait_for_function('window.mapLoaded === true')
+            check('/map/?world=world' in map_page.url, 'Public map canonical prefix and query')
+            check(public_map_context.request.get(base + '/api/stats').status == 401, 'Public map grants no panel permissions')
+            check(map_page.evaluate("fetch('maps/world/live/players.json').then(r => r.json()).then(data => Array.isArray(data.players))"), 'Relative BlueMap live-data URL works')
+            public_map_context.close()
+            page.screenshot(path=str(artifacts / 'bluemap-settings.png'))
             # Exercise all Settings sections and persist every accent using the real form.
             for accent in ('lime','yellow','blue'):
                 page.goto(base + '/settings')
@@ -197,6 +349,32 @@ def main():
             page.wait_for_load_state()
             check(fixture.module.load_config()['server_name'] == 'Renamed QA Realm', 'Server name persistence')
             check(page.locator('.sidebar-brand').inner_text().startswith('Byte Panel'), 'Product brand unchanged')
+            # Anonymous sign-in identity follows the current server, including long names.
+            login_context = browser.new_context(reduced_motion='reduce')
+            login_page = login_context.new_page()
+            login_page.on('pageerror', lambda error: errors.append(str(error)))
+            saved_config = fixture.module.load_config()
+            try:
+                for name, suffix in [('Renamed QA Realm', 'server-icon'), ('R' * 80, 'long-name')]:
+                    fixture.module.save_config({**saved_config, 'server_name': name})
+                    for width, height in [(1440, 1000), (390, 844)]:
+                        login_page.set_viewport_size({'width': width, 'height': height})
+                        login_page.goto(base + '/login')
+                        login_page.wait_for_function("document.querySelector('.login-server-icon img').naturalWidth === 64")
+                        login_page.locator('.login-server-icon img').evaluate('(img) => img.decode()')
+                        identity = login_page.locator('.login-card .login-server-identity')
+                        check(identity.locator('h1').inner_text() == name, 'Sign-in identity follows current server name')
+                        check(identity.locator('img').get_attribute('src') == '/branding-assets/server-icon.png', 'Sign-in uses Minecraft server icon')
+                        icon_box = identity.locator('img').bounding_box()
+                        check(icon_box['width'] == 40 and icon_box['height'] == 40, 'Sign-in icon keeps its visible size with long names')
+                        check(login_page.locator('.login-brand').count() == 0, 'No branding row above sign-in card')
+                        check(login_page.get_by_role('heading', name='Welcome back', exact=True).count() == 0, 'Server identity replaces Welcome back')
+                        check(not login_page.evaluate('document.documentElement.scrollWidth > innerWidth'), f'Sign-in {suffix} fits at {width}')
+                        check(identity.bounding_box()['width'] <= login_page.locator('.login-card').bounding_box()['width'], 'Server identity fits login card')
+                        login_page.screenshot(path=str(artifacts / f'login-{suffix}-{width}.png'))
+            finally:
+                fixture.module.save_config(saved_config)
+                login_context.close()
             # All Properties tabs/values/types, search and unsaved reset (no POST).
             page.goto(base + '/properties')
             for tab in page.locator('.tab-btn').all():
@@ -278,6 +456,7 @@ def main():
         if server:
             server.shutdown()
             server.server_close()
+        MapFixture.tearDownClass()
         fixture.doCleanups()
         Fixture.tearDownClass()
 

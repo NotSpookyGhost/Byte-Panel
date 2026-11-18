@@ -32,7 +32,7 @@
             </div>
             
             <div style="display: flex; gap: 10px; margin-top: 15px; max-width: 600px; margin-left: auto; margin-right: auto;">
-                <input data-permission="console.command" type="text" id="commandInput" aria-label="Server command" placeholder="Enter a server command (e.g. say Hello World)"
+                <input data-permission="console.command" type="text" id="commandInput" aria-label="Server command" placeholder="Command (no / needed; e.g. help or plugins)"
                     style="flex-grow: 1; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-main);"
                     onkeydown="if(event.key === 'Enter') sendCommand()">
                 <button data-permission="console.command" class="btn btn-start" onclick="sendCommand()">Send</button>

@@ -115,6 +115,18 @@ def _url(value, values):
     return escape(value, quote=True)
 
 
+def _image_url(value, values):
+    """Allow the optional server icon only as a locally attached CID image."""
+    if isinstance(value, str) and re.fullmatch(r'\{\{\s*server_icon\s*\}\}', value.strip()):
+        source = values.get('server_icon')
+        if source is None or source == '':
+            return None
+        if not isinstance(source, str) or not re.fullmatch(r'cid:[A-Za-z0-9._@-]+', source):
+            raise EmailTemplateError('Invalid inline server icon reference.')
+        return escape(source, quote=True)
+    return _url(value, values)
+
+
 def render_email_design(document, values):
     """Return email-safe HTML for EmailLayout/Text/Heading/Image/Button/Container."""
     document = _mapping(document)
@@ -160,7 +172,11 @@ def render_email_design(document, values):
         elif kind == 'Container':
             content = children(props.get('childrenIds', []), path + (block_id,))
         elif kind == 'Image':
-            src = _url(props.get('url'), values)
+            src = _image_url(props.get('url'), values)
+            link = _url(props['linkHref'], values) if props.get('linkHref') else None
+            if src is None:
+                # Do not leave a padded table or broken image when no icon exists.
+                return ''
             alt = _text(props.get('alt', ''), values)
             image_style = {'display': 'inline-block', 'max-width': '100%', 'height': 'auto',
                            'border': '0', 'outline': 'none', 'text-decoration': 'none',
@@ -173,8 +189,8 @@ def render_email_design(document, values):
                     dimensions += f' {key}="{number}"'
                     image_style[key] = number + 'px'
             content = f'<img src="{src}" alt="{alt}"{dimensions} style="{_css(image_style)}">'
-            if props.get('linkHref'):
-                content = f'<a href="{_url(props["linkHref"], values)}" target="_blank">{content}</a>'
+            if link:
+                content = f'<a href="{link}" target="_blank">{content}</a>'
         elif kind == 'Button':
             size = _choice(props.get('size') or 'medium', ('x-small', 'small', 'medium', 'large'))
             shape = _choice(props.get('buttonStyle') or 'rounded', ('rectangle', 'rounded', 'pill'))

@@ -9,7 +9,7 @@ from unittest.mock import patch
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'app'))
-from server_icon import normalize_icon, save_server_icon, panel_icon_path, ServerIconError, MAX_UPLOAD_BYTES
+from server_icon import normalize_icon, save_server_icon, server_icon_path, ServerIconError, MAX_UPLOAD_BYTES
 
 
 def image_bytes(size=(120, 60), mode='RGBA', color=(20, 80, 120, 128), format='PNG', **kwargs):
@@ -82,14 +82,14 @@ class ServerIconTests(unittest.TestCase):
         save_server_icon(io.BytesIO(image_bytes(color='red')), self.server)
         self.assertNotEqual(target.read_bytes(), original)
 
-    def test_active_icon_takes_priority_over_legacy_without_copying_it(self):
-        self.assertIsNone(panel_icon_path(self.server, self.branding))
+    def test_server_icon_is_independent_of_legacy_panel_logo(self):
+        self.assertIsNone(server_icon_path(self.server))
         legacy = self.branding / 'logo.png'
         legacy.write_bytes(image_bytes())
-        self.assertEqual(panel_icon_path(self.server, self.branding), legacy)
+        self.assertIsNone(server_icon_path(self.server))
         self.assertFalse((self.server / 'server-icon.png').exists())
         active = save_server_icon(io.BytesIO(image_bytes(color='red')), self.server)
-        self.assertEqual(panel_icon_path(self.server, self.branding).resolve(), active)
+        self.assertEqual(server_icon_path(self.server).resolve(), active)
         self.assertEqual(legacy.read_bytes(), image_bytes())
 
     def test_non_file_icon_target_is_rejected_without_changing_it(self):

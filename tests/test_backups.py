@@ -1,4 +1,5 @@
 """Backup regression tests: temporary data only, no Docker or Minecraft."""
+from contextlib import contextmanager
 import errno
 import json
 import logging
@@ -12,7 +13,8 @@ from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'app'))
-from server_backups import ServerBackups, BackupBusy, backup_error, backup_server_key
+from server_backups import (ServerBackups, BackupBusy, BackupCompletedError,
+                            backup_error, backup_server_key)
 
 
 class BackupTests(unittest.TestCase):
@@ -223,3 +225,241 @@ class BackupTests(unittest.TestCase):
         self.assertIn('Permission denied', backup_error(PermissionError(errno.EACCES, 'denied')))
         self.assertIn('disappeared', backup_error(FileNotFoundError(errno.ENOENT, 'missing')))
         self.assertIn('logs', backup_error(RuntimeError()))
+
+    def test_offline_hook_wraps_manual_automatic_and_restore_archives_under_lock(self):
+        self.config['backup_shutdown'] = True
+        events = []
+
+        @contextmanager
+        def lifecycle(progress):
+            self.assertTrue(callable(progress))
+            self.assertTrue(self.manager.lock.locked())
+            events.append('stop')
+            try:
+                yield
+            finally:
+                self.assertTrue(self.manager.lock.locked())
+                events.append('restart')
+
+        self.manager = ServerBackups(self.data, self.server, lambda: self.config.copy(),
+                                     self.log, backup_context=lifecycle)
+        original_archive = self.manager._archive
+
+        def archive(*args, **kwargs):
+            self.assertTrue(self.manager.lock.locked())
+            events.append('archive')
+            return original_archive(*args, **kwargs)
+
+        for options in ({}, {'is_manual': False}, {'is_restore_backup': True}):
+            with self.subTest(options=options), patch.object(self.manager, '_archive', side_effect=archive):
+                events.clear()
+                completed = self.create(**options)
+                self.assertTrue(completed.is_file())
+                self.assertEqual(events, ['stop', 'archive', 'restart'])
+                self.assertFalse(self.manager.lock.locked())
+
+    def test_offline_hook_requires_saved_opt_in_and_skips_initial_backup(self):
+        def unexpected_lifecycle(progress):
+            self.fail('Disabled or initial backup must not stop Minecraft')
+
+        self.manager = ServerBackups(self.data, self.server, lambda: self.config.copy(),
+                                     self.log, backup_context=unexpected_lifecycle)
+        # Missing and explicitly disabled settings preserve the existing live workflow.
+        self.assertTrue(self.create().is_file())
+        self.config['backup_shutdown'] = False
+        self.assertTrue(self.create(is_manual=False).is_file())
+        self.config['backup_shutdown'] = True
+        self.assertTrue(self.create(is_initial=True).is_file())
+        self.assertFalse(self.manager.lock.locked())
+
+    def test_offline_hook_enter_failure_never_reads_server_files(self):
+        self.config['backup_shutdown'] = True
+
+        @contextmanager
+        def lifecycle(progress):
+            self.assertTrue(self.manager.lock.locked())
+            raise RuntimeError('Minecraft did not stop safely')
+            yield  # Makes this a context manager without allowing archive creation.
+
+        self.manager = ServerBackups(self.data, self.server, lambda: self.config.copy(),
+                                     self.log, backup_context=lifecycle)
+        with patch.object(self.manager, '_archive') as archive:
+            with self.assertRaisesRegex(RuntimeError, 'did not stop safely'):
+                self.create()
+        archive.assert_not_called()
+        self.assertEqual(self.archives(), [])
+        self.assertFalse(self.manager.lock.locked())
+
+    def test_offline_archive_failure_still_restarts_and_removes_partial(self):
+        self.config['backup_shutdown'] = True
+        events = []
+
+        @contextmanager
+        def lifecycle(progress):
+            events.append('stop')
+            try:
+                yield
+            finally:
+                self.assertTrue(self.manager.lock.locked())
+                events.append('restart')
+
+        self.manager = ServerBackups(self.data, self.server, lambda: self.config.copy(),
+                                     self.log, backup_context=lifecycle)
+        with patch('server_backups.zipfile.ZipFile.write', side_effect=OSError(errno.ENOSPC, 'disk full')):
+            with self.assertRaises(OSError) as raised:
+                self.create()
+        self.assertEqual(raised.exception.errno, errno.ENOSPC)
+        self.assertEqual(events, ['stop', 'restart'])
+        self.assertEqual(self.archives(), [])
+        self.assertEqual(list((self.data / 'backups').rglob('*.partial')), [])
+        self.assertFalse(self.manager.lock.locked())
+
+    def test_restart_failure_preserves_completed_archive_and_reports_its_path(self):
+        self.config['backup_shutdown'] = True
+
+        @contextmanager
+        def lifecycle(progress):
+            yield
+            self.assertTrue(self.manager.lock.locked())
+            raise RuntimeError('Minecraft restart failed')
+
+        self.manager = ServerBackups(self.data, self.server, lambda: self.config.copy(),
+                                     self.log, backup_context=lifecycle)
+        with self.assertRaises(BackupCompletedError) as raised:
+            self.create()
+        error = raised.exception
+        self.assertIsInstance(error.path, str)
+        completed = Path(error.path)
+        self.assertEqual(self.archives(), [completed])
+        with zipfile.ZipFile(completed) as archive:
+            self.assertIsNone(archive.testzip())
+            self.assertEqual(archive.read('world/level.dat'), b'world data')
+        self.assertIn('Backup created, but', backup_error(error))
+        self.assertIn('Minecraft restart failed', backup_error(error))
+        self.assertFalse(self.manager.lock.locked())
+
+    def test_background_offline_backup_remains_running_and_locked_until_restart(self):
+        self.config['backup_shutdown'] = True
+        restart_entered = threading.Event()
+        release_restart = threading.Event()
+        finished = threading.Event()
+        events = []
+
+        @contextmanager
+        def lifecycle(progress):
+            self.assertTrue(self.manager.lock.locked())
+            events.append('stop')
+            progress(message='Stopping Minecraft safely...')
+            try:
+                yield
+            finally:
+                self.assertTrue(self.manager.lock.locked())
+                events.append('restart')
+                progress(message='Restarting Minecraft...')
+                restart_entered.set()
+                if not release_restart.wait(5):
+                    raise RuntimeError('Test did not release restart')
+
+        self.manager = ServerBackups(self.data, self.server, lambda: self.config.copy(),
+                                     self.log, backup_context=lifecycle)
+        original_archive = self.manager._archive
+        original_update = self.manager._update
+
+        def archive(*args, **kwargs):
+            self.assertTrue(self.manager.lock.locked())
+            events.append('archive')
+            return original_archive(*args, **kwargs)
+
+        def update(job_id, **values):
+            original_update(job_id, **values)
+            if values.get('status') in ('success', 'error'):
+                finished.set()
+
+        with patch.object(self.manager, '_archive', side_effect=archive), \
+             patch.object(self.manager, '_update', side_effect=update):
+            try:
+                job = self.manager.start('scope')
+                self.assertTrue(restart_entered.wait(5))
+                status = self.manager.status(job['job_id'], 'scope')
+                self.assertEqual(status['status'], 'running')
+                self.assertEqual(status['message'], 'Restarting Minecraft...')
+                self.assertEqual(len(self.archives()), 1)
+                self.assertTrue(self.manager.lock.locked())
+                with self.assertRaises(BackupBusy):
+                    self.manager.start('scope')
+                with self.assertRaises(BackupBusy):
+                    self.create()
+            finally:
+                release_restart.set()
+                self.assertTrue(finished.wait(5))
+        status = self.manager.status(job['job_id'], 'scope')
+        self.assertEqual(events, ['stop', 'archive', 'restart'])
+        self.assertEqual(status['status'], 'success')
+        self.assertEqual(status['file'], self.archives()[0].name)
+        self.assertEqual(status['server_key'], 'Test_Server')
+        self.assertFalse(self.manager.lock.locked())
+
+    def test_background_restart_failure_reports_saved_archive_in_error_status(self):
+        self.config['backup_shutdown'] = True
+        finished = threading.Event()
+
+        @contextmanager
+        def lifecycle(progress):
+            yield
+            raise RuntimeError('Minecraft restart failed')
+
+        self.manager = ServerBackups(self.data, self.server, lambda: self.config.copy(),
+                                     self.log, backup_context=lifecycle)
+        original_update = self.manager._update
+
+        def update(job_id, **values):
+            original_update(job_id, **values)
+            if values.get('status') in ('success', 'error'):
+                finished.set()
+
+        with patch.object(self.manager, '_update', side_effect=update), \
+             self.assertLogs(self.log, level='ERROR'):
+            job = self.manager.start('scope')
+            self.assertTrue(finished.wait(5))
+        status = self.manager.status(job['job_id'], 'scope')
+        completed, = self.archives()
+        self.assertEqual(status['status'], 'error')
+        self.assertIs(status['backup_created'], True)
+        self.assertEqual(status['file'], completed.name)
+        self.assertEqual(status['server_key'], completed.parent.name)
+        self.assertIn('Backup created, but', status['message'])
+        self.assertIn('Minecraft restart failed', status['message'])
+        self.assertIsNone(self.manager.status(job['job_id'], 'unrelated-scope'))
+        self.assertFalse(self.manager.lock.locked())
+
+    def test_background_stop_failure_does_not_archive_or_report_backup_created(self):
+        self.config['backup_shutdown'] = True
+        finished = threading.Event()
+
+        @contextmanager
+        def lifecycle(progress):
+            raise RuntimeError('Minecraft did not stop safely')
+            yield
+
+        self.manager = ServerBackups(self.data, self.server, lambda: self.config.copy(),
+                                     self.log, backup_context=lifecycle)
+        original_update = self.manager._update
+
+        def update(job_id, **values):
+            original_update(job_id, **values)
+            if values.get('status') in ('success', 'error'):
+                finished.set()
+
+        with patch.object(self.manager, '_archive') as archive, \
+             patch.object(self.manager, '_update', side_effect=update), \
+             self.assertLogs(self.log, level='ERROR'):
+            job = self.manager.start('scope')
+            self.assertTrue(finished.wait(5))
+        archive.assert_not_called()
+        status = self.manager.status(job['job_id'], 'scope')
+        self.assertEqual(status['status'], 'error')
+        self.assertFalse(status.get('backup_created', False))
+        self.assertNotIn('file', status)
+        self.assertIn('did not stop safely', status['message'])
+        self.assertEqual(self.archives(), [])
+        self.assertFalse(self.manager.lock.locked())

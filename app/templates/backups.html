@@ -396,7 +396,7 @@
         }
         
         async function createManualBackup() {
-            let confirmCreate = await showModal("Create Manual Backup", "Are you sure you want to create a new manual backup?", true);
+            let confirmCreate = await showModal("Create Manual Backup", "Are you sure you want to create a new manual backup?{% if config.get('backup_shutdown') %}<br><br>Shutdown backups are enabled. If Minecraft is running, players will be disconnected until the backup finishes and Minecraft starts again.{% endif %}", true);
             if (!confirmCreate) return;
             
             let modal = await showModal("Creating Backup", "Preparing the server backup...", false, true);
@@ -413,7 +413,7 @@
         async function restoreBackup(serverName, filename) {
             let statsRes = await fetch('/api/stats');
             let statsData = await statsRes.json();
-            if (statsData.server_online) {
+            if (!statsRes.ok || statsData.status !== 'Offline') {
                 await showModal("Server Running", "The server must be offline to restore a backup. Please stop the server first.", false, false, true);
                 return;
             }

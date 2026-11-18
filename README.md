@@ -34,10 +34,33 @@ an existing server ZIP. Available versions depend on the engine.
 
 Use **Overview** for server controls, **Console** for commands, **Logs** and
 **Players** to review activity, and **Properties** to edit server settings.
+Console commands do not need a leading `/`: enter `help`, `plugins`, or
+`say Hello World`. The panel adds the prefix for modern Paper/Purpur while keeping
+the native console format for older engines. Commands already starting with `/`
+(including special plugin prefixes such as `//`) are left unchanged.
 Stop the server before changing files that it uses, then restart when required.
 Use **Panel Settings → General** to change the server name. The product name
 stays **Byte Panel**. Settings are grouped into General, Runtime, Backups,
 Appearance, Email and Operations.
+
+Under **Panel Settings → Runtime**, two separate options are available (off by default):
+
+- **Automatically start server when Byte Panel starts:** starts the configured
+  server once when the panel/container starts. Enabling it does not immediately
+  start an offline server.
+- **Automatically restart server after a crash:** restarts a panel-managed
+  Minecraft process after an unexpected non-zero exit, after a 10-second delay.
+  Recovery waits for active backups/file operations and the old process/log reader.
+  After three restart attempts within five minutes, automatic recovery stops;
+  inspect the logs and press **Start** manually to try again.
+
+The **Stop** button and console `stop` commands cancel pending crash recovery.
+Clean exits stay stopped. An intentional shutdown backup uses its own stop/backup/
+start workflow, not the crash monitor. Purging, importing or restoring a server
+turns both automatic options off. If auto-start remains enabled, a later restart
+of the panel/container starts Minecraft again even if it was stopped manually.
+These options do not restart Docker itself or detect a server that is hung but
+still running.
 
 **Appearance** offers the Obsidian theme and independent lime (default), yellow
 or electric-blue accents. Existing light/true-black themes and custom images
@@ -55,13 +78,46 @@ backend does not measure it; it is not a live TPS monitor.
 
 Open **Panel Settings → General → Server icon**, choose a PNG, JPEG or WebP (up to
 5 MiB and 16 million pixels), then save. Byte Panel creates a 64×64 PNG without
-stretching or cropping and uses it for the panel logo and server badge. Restart
-Minecraft and refresh the multiplayer list to see the same icon in-game.
+stretching or cropping and uses it on the **sign-in screen**, in welcome emails,
+in the sidebar's **server badge**, and in Minecraft's multiplayer server list. The sign-in card
+shows your server name alongside its icon. Restart Minecraft and refresh the list
+to see the icon in-game. Byte Panel's top-left navigation logo stays unchanged.
 
 The image is stored as `server/server-icon.png` in the data volume, so server
-backups and imports carry it with them. An existing panel-only logo remains a
-fallback; upload it here once to also apply it to Minecraft. The favicon and
-background controls stay under Appearance. Purging a server clears its server icon.
+backups and imports carry it with them. Legacy panel-only logos no longer replace
+Byte Panel branding. The favicon and background controls stay under Appearance.
+Purging a server clears its server icon.
+
+### Public BlueMap at /map
+
+1. Install the [BlueMap plugin/mod compatible with your server](https://bluemap.bluecolored.de/wiki/getting-started/Installation.html).
+   On Paper/Purpur, upload the plugin JAR through **Plugins**, then restart the
+   Minecraft server to generate `plugins/BlueMap/` configuration files.
+2. Review BlueMap's `core.conf` and enable `accept-download` if you agree to its
+   resource download. In `webserver.conf`, keep `enabled: true` and `port: 8100`.
+   Optional `ip: "127.0.0.1"` restricts the webserver to the container itself.
+   Reload BlueMap or restart Minecraft after editing its configuration.
+3. Open **Panel Settings → General → BlueMap**, enable the **public map**, set the
+   matching internal port (default **8100**) and save. Use the sidebar **Map** link
+   or append `/map` to the panel URL:
+   - LAN: `http://192.168.0.10:5050/map`
+   - Tunnel: `https://mc.bytedev.app/map`
+
+The panel proxies BlueMap inside the same Minecraft container; it does not install
+BlueMap, render maps itself or connect to a separate external BlueMap container.
+No extra Docker port publication or Cloudflare tunnel hostname is needed when the
+existing hostname already forwards all paths to this panel. Any Cloudflare Access
+policy or path-specific rule still applies; bypass caching/HTML rewriting for
+`/map/*` if you have enabled custom rules. `/map` redirects to `/map/` so relative
+assets resolve, following [BlueMap's subdirectory proxy guidance](https://bluemap.bluecolored.de/wiki/webserver/ReverseProxy.html).
+
+The map is **public without a panel account**, including whatever world details,
+markers and player locations BlueMap exposes. Panel management remains protected.
+Only install trusted BlueMap add-ons/custom scripts because the map shares the
+panel's website origin. Integration starts disabled and is disabled again after a
+purge, import or restore; enable it deliberately for the resulting server. If
+Minecraft/BlueMap is stopped, the map displays an unavailable message. Compressed
+tiles and live player/marker updates are proxied through the same URL.
 
 ### Plugins, configs and data files
 
@@ -130,6 +186,14 @@ Use `{{servername}}` for the **Server name** (Settings → General), `{{username
 `{{login_url}}` for the sign-in link and `{{expires}}` for the password expiry.
 `{{password}}` is available **only in the second email**.
 
+Welcome emails automatically show the **Server icon** from General settings above
+the welcome heading, while keeping the Byte Panel banner. The icon is embedded
+in the email, so loading it does not require a connection to your panel. Email
+clients may still apply their own image-display policies. For custom welcome
+designs, use `{{server_icon}}` as an **Image block URL** (64 × 64 is recommended).
+It is not a normal website link or a text placeholder. If the icon is missing,
+unreadable or invalid, the image block is omitted. The password email is unchanged.
+
 Update the matching [plain-text fallbacks](app/templates/emails/) when changing
 wording, then rebuild and recreate the container to deploy template edits.
 These are JSON design files, not an in-panel email editor. If delivery fails,
@@ -139,10 +203,29 @@ check the inbox/spam folder and SMTP settings before resending.
 
 Use **Backups** to create or restore server ZIPs, subject to your permissions.
 Creation runs in the background with progress checks; new ZIPs appear in the list
-only after completion and verification. Stop Minecraft first for a consistent snapshot of worlds and
-plugin databases. Failed backups report the storage/file error without replacing
-existing backups. Automatic backup frequency and retention are configured in
-**Settings**. Backup creation cannot overlap with a restore, import or purge.
+only after completion and verification. Configure scheduling and retention under
+**Panel Settings → Backups**.
+
+Enable **Shut down server during backups** to gracefully stop a running server,
+wait for it to exit, create and verify the ZIP, then start Minecraft again. This
+applies to manual and scheduled backups; servers already offline stay offline.
+The setting is off by default. Players are disconnected during the backup, and
+users with backup creation permission can trigger that downtime. With this option
+off, stop Minecraft yourself for a consistent snapshot of worlds and plugin data.
+
+If shutdown takes more than 3 minutes, the backup aborts without force-killing the
+server. A cleanly stopped server is restarted even if archiving fails. Abnormal
+shutdown or an unfinished log reader requires manual inspection; no archive is
+created. If restart fails, any completed ZIP is kept and the panel reports the
+restart problem. Failed scheduled shutdown backups wait at least one hour before
+retrying, avoiding repeated stop/start cycles. Initial setup backups never start
+a server. Offline copies reduce the risk of inconsistent chunk files; they do not
+repair existing corruption or protect against unrelated storage failures.
+
+Backup creation cannot overlap with panel start/stop/restart, console commands,
+settings changes, restore, import or purge. Restores require Minecraft to be fully
+offline. Do not use an external watchdog or plugin to restart Minecraft during an
+offline backup. Failed backups leave existing archives intact.
 
 Byte Panel backups include a file called **`ServerEngineInfo`** at the root of the
 ZIP. It contains the server metadata Byte Panel uses when importing a server:

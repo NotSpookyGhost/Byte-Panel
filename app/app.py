@@ -24,8 +24,11 @@ from plugin_manager import register_plugin_manager
 from panel_security import PanelSecurity
 from panel_accounts import grants, session_grants
 from minecraft_releases import MinecraftReleases, DOWNLOAD_HEADERS, java_path
-from server_backups import ServerBackups, BackupBusy, backup_error, backup_server_key
-from server_icon import panel_icon_path, save_server_icon, ServerIconError
+from server_backups import ServerBackups, BackupBusy, BackupCompletedError, backup_error, backup_server_key
+from backup_lifecycle import BackupLifecycle
+from server_automation import ServerAutomation
+from server_icon import server_icon_path, save_server_icon, ServerIconError
+from bluemap import register_bluemap, checked_port
 
 release_service = MinecraftReleases()
 
@@ -83,6 +86,7 @@ os.makedirs(SERVER_DIR, exist_ok=True)
 os.makedirs(os.path.join(DATA_DIR, "logs"), exist_ok=True)
 
 CONFIG_FILE = os.path.join(DATA_DIR, "panel_config.json")
+CONFIG_LOCK = threading.RLock()
 PLAYER_DB_FILE = os.path.join(DATA_DIR, "players.db")
 GEOIP_DB_FILE = os.path.join(DATA_DIR, "GeoLite2-Country.mmdb")
 
@@ -167,6 +171,11 @@ DEFAULT_CONFIG = {
     "theme": "dark",
     "panel_name": "Byte Panel",
     "accent": "lime",
+    "bluemap_enabled": False,
+    "bluemap_port": 8100,
+    "backup_shutdown": False,
+    "auto_start": False,
+    "auto_restart": False,
     "bg_blur": 5,
     "bg_tint": 50,
     "timezone": "UTC",
@@ -175,34 +184,55 @@ DEFAULT_CONFIG = {
 
 # --- Helper Functions ---
 def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(DEFAULT_CONFIG, f, indent=4)
-        return DEFAULT_CONFIG.copy()
-    with open(CONFIG_FILE, "r") as f:
-        conf = json.load(f)
-        for k, v in DEFAULT_CONFIG.items():
-            if k not in conf:
-                conf[k] = v
-        # Product branding is fixed; the server keeps its independent display name.
-        conf["panel_name"] = "Byte Panel"
-        if conf.get("accent") not in ("lime", "yellow", "blue"):
-            conf["accent"] = "lime"
-        return conf
+    with CONFIG_LOCK:
+        if not os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(DEFAULT_CONFIG, f, indent=4)
+            return DEFAULT_CONFIG.copy()
+        with open(CONFIG_FILE, "r") as f:
+            conf = json.load(f)
+            for k, v in DEFAULT_CONFIG.items():
+                if k not in conf:
+                    conf[k] = v
+            # Product branding is fixed; the server keeps its independent display name.
+            conf["panel_name"] = "Byte Panel"
+            if conf.get("accent") not in ("lime", "yellow", "blue"):
+                conf["accent"] = "lime"
+            return conf
 
 def save_config(config):
-    config.pop('admin_pass', None)
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=4)
+    with CONFIG_LOCK:
+        config.pop('admin_pass', None)
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=4)
+
+
+def mark_minecraft_offline(expected_pid=None):
+    # Update only runtime fields from a fresh snapshot, never stale settings.
+    with CONFIG_LOCK:
+        config = load_config()
+        if expected_pid is not None and config.get('server_pid') != expected_pid:
+            return
+        config.update(is_running=False, server_pid=None, target_state='Offline')
+        save_config(config)
 
 security = PanelSecurity(app, DATA_DIR, load_config, save_config, lambda: get_custom_assets_state())
-server_backups = ServerBackups(DATA_DIR, SERVER_DIR, load_config, app.logger)
+backup_lifecycle = BackupLifecycle(lambda: MINECRAFT_PROCESS, lambda: MINECRAFT_LOG_THREAD,
+                                   load_config, save_config, lambda: start_minecraft_server(), app.logger,
+                                   before_stop=lambda: server_automation.stop())
+server_backups = ServerBackups(DATA_DIR, SERVER_DIR, load_config, app.logger, backup_lifecycle.offline)
+server_automation = ServerAutomation(load_config, lambda: start_minecraft_server(automatic=True),
+                                     lambda: MINECRAFT_PROCESS, lambda: MINECRAFT_LOG_THREAD,
+                                     server_backups.exclusive, app.logger)
+register_bluemap(app, load_config)
 
 
 def exclusive_server_files(function):
     """Do not replace server data while a backup is reading it (or vice versa)."""
     @wraps(function)
     def guarded(*args, **kwargs):
+        if request.method in ('GET', 'HEAD'):
+            return function(*args, **kwargs)
         try:
             with server_backups.exclusive():
                 return function(*args, **kwargs)
@@ -528,7 +558,7 @@ def monitor_minecraft_stream(process):
         security.emit_console(socketio, decoded_line)
     process.stdout.close()
 
-def start_minecraft_server():
+def start_minecraft_server(automatic=False):
     global MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
     config = load_config()
 
@@ -537,6 +567,10 @@ def start_minecraft_server():
     configured_pid_is_live = configured_pid and psutil.pid_exists(configured_pid)
     if process_is_live or configured_pid_is_live:
         print("[WATCHDOG] ERROR: Cannot start. Server is already running.", flush=True)
+        return False
+
+    if MINECRAFT_LOG_THREAD and MINECRAFT_LOG_THREAD.is_alive():
+        app.logger.warning('Cannot start Minecraft while its previous log reader is finishing.')
         return False
 
     # Clear stale state left behind by a process that exited between status polls.
@@ -611,6 +645,7 @@ def start_minecraft_server():
             bufsize=1
         )
         MINECRAFT_PROCESS = process
+        server_automation.track(process, automatic=automatic)
 
         # Catch invalid launch targets and immediate JVM failures before claiming success.
         time.sleep(0.75)
@@ -691,6 +726,9 @@ def start_minecraft_server():
                 except Exception as e:
                     print(f"Log parsing error: {e}", flush=True)
 
+            # EOF alone does not prove Java has exited. Never clear the live PID
+            # or let recovery start another server while the old process remains.
+            proc.wait()
             log_f.close()
             # On crash/stop, mark everyone offline
             try:
@@ -700,12 +738,7 @@ def start_minecraft_server():
                 conn.close()
             except: pass
 
-            exit_config = load_config()
-            if exit_config.get('server_pid') == proc.pid:
-                exit_config['is_running'] = False
-                exit_config['server_pid'] = None
-                exit_config['target_state'] = 'Offline'
-                save_config(exit_config)
+            mark_minecraft_offline(expected_pid=proc.pid)
             if MINECRAFT_PROCESS is proc:
                 MINECRAFT_PROCESS = None
             
@@ -733,6 +766,8 @@ def start_minecraft_server():
 
 def stop_minecraft_server():
     global MINECRAFT_PROCESS
+    # Cancel a pending crash restart even if Minecraft has already exited.
+    server_automation.stop()
     config = load_config()
     pid = config.get('server_pid')
     
@@ -749,10 +784,7 @@ def stop_minecraft_server():
             MINECRAFT_PROCESS.stdin.write("stop\n")
             MINECRAFT_PROCESS.stdin.flush()
             print("[WATCHDOG] SERVER STOP: Sent save-all then stop command via stdin.", flush=True)
-            # Give it a second before updating config
-            config['is_running'] = False
-            config['server_pid'] = None
-            save_config(config)
+            # Keep its PID until exit is confirmed by the reader/status monitor.
             
             # Write to server console so the UI shows it stopped
             try:
@@ -771,10 +803,7 @@ def stop_minecraft_server():
             os.kill(pid, signal.SIGTERM)
             print(f"[WATCHDOG] SERVER STOP: Sent termination signal to PID {pid}.", flush=True)
             
-            # Update the config state
-            config['is_running'] = False
-            config['server_pid'] = None
-            save_config(config)
+            # Keep the PID until the terminated process has actually exited.
             
             # Write to server console so the UI shows it stopped
             try:
@@ -798,6 +827,34 @@ def stop_minecraft_server():
         return False
 
 # --- HTTP Routing & Middleware ---
+def wait_for_minecraft_shutdown(process, reader):
+    """Confirm process exit and drain its logs before replacing files or restarting."""
+    global MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
+    try:
+        if process is not None:
+            process.wait(timeout=30)
+            if process.poll() is None:
+                raise RuntimeError('Minecraft is still stopping. Wait until it is offline and retry.')
+        pid = load_config().get('server_pid')
+        if pid and (process is None or pid != process.pid) and psutil.pid_exists(pid):
+            psutil.Process(pid).wait(timeout=30)
+    except (subprocess.TimeoutExpired, psutil.TimeoutExpired) as error:
+        raise RuntimeError('Minecraft is still stopping. No files were replaced and no new server was started. Wait and retry.') from error
+    except psutil.NoSuchProcess:
+        pass
+    if reader is not None:
+        reader.join(timeout=10)
+        if reader.is_alive():
+            raise RuntimeError('Minecraft log activity is still finishing. Wait and retry.')
+    if MINECRAFT_PROCESS is process:
+        MINECRAFT_PROCESS = None
+    if MINECRAFT_LOG_THREAD is reader:
+        MINECRAFT_LOG_THREAD = None
+    config = load_config()
+    config.update(is_running=False, server_pid=None, target_state='Offline')
+    save_config(config)
+
+
 
 def checked_backup_path(server_name, filename):
     for value in (server_name, filename):
@@ -824,6 +881,7 @@ def validate_server_zip(path):
 
 # Wire it to a Flask Route
 @app.route('/stop', methods=['POST'])
+@exclusive_server_files
 def stop_server():
     stop_minecraft_server()
     return redirect(url_for('overview'))
@@ -874,14 +932,13 @@ def api_restore_backup():
     validate_server_zip(path)
         
     global MINECRAFT_PROCESS
-    if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
-        stop_minecraft_server()
-        time.sleep(2)
-        config = load_config()
-        if config.get('server_pid'):
-            try: os.kill(config.get('server_pid'), 9)
-            except: pass
+    config = load_config()
+    if ((MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None) or
+            (config.get('server_pid') and psutil.pid_exists(config['server_pid'])) or
+            (MINECRAFT_LOG_THREAD and MINECRAFT_LOG_THREAD.is_alive())):
+        return jsonify(error='Stop Minecraft and wait until shutdown finishes before restoring a backup.'), 409
         
+    server_automation.stop()
     # Wipe current server directory
     for f in os.listdir(SERVER_DIR):
         f_path = os.path.join(SERVER_DIR, f)
@@ -920,6 +977,12 @@ def api_restore_backup():
             try: os.remove(imported_config)
             except: pass
 
+    # A restored world must be explicitly opted back into public map hosting.
+    restored_config = load_config()
+    restored_config['bluemap_enabled'] = False
+    restored_config['auto_start'] = False
+    restored_config['auto_restart'] = False
+    save_config(restored_config)
     actor = security.store.reset(keep_actor=g.panel_user)
     security.store.sign_in(session, actor)
     return jsonify({"status": "restored"})
@@ -1002,8 +1065,8 @@ def backups_page():
 
 @app.route('/branding-assets/<filename>')
 def serve_custom_branding(filename):
-    if filename == 'logo.png':
-        icon = panel_icon_path(SERVER_DIR, BRANDING_DIR)
+    if filename == 'server-icon.png':
+        icon = server_icon_path(SERVER_DIR)
         if icon is None:
             abort(404)
         response = send_file(icon, conditional=True, max_age=0)
@@ -1450,10 +1513,8 @@ def moderate_player(action):
     return jsonify({"status": "success"})
 
 def get_custom_assets_state():
-    icon = panel_icon_path(SERVER_DIR, BRANDING_DIR)
     return {
-        "logo": icon is not None,
-        "server_icon": icon is not None and icon.name == 'server-icon.png',
+        "server_icon": server_icon_path(SERVER_DIR) is not None,
         "favicon": os.path.exists(os.path.join(BRANDING_DIR, 'favicon.ico')),
         "bg": os.path.exists(os.path.join(BRANDING_DIR, 'bg.jpg'))
     }
@@ -1546,6 +1607,7 @@ def properties():
                            has_custom=get_custom_assets_state())
 
 @app.route('/settings', methods=['GET', 'POST'])
+@exclusive_server_files
 def settings():
     config = load_config()
     settings_message = None
@@ -1561,6 +1623,15 @@ def settings():
                                               re.search(r'[\x00-\x1f\x7f]', server_name)):
             return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
                                    settings_error='Server name must be 1–80 characters without control characters.'), 400
+        # Validate map settings before saving any fields or uploaded images.
+        try:
+            map_port = checked_port(request.form.get('bluemap_port', config.get('bluemap_port', 8100)))
+        except ValueError as error:
+            return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
+                                   settings_error=str(error)), 400
+        config['bluemap_port'] = map_port
+        if 'bluemap_settings_present' in request.form:
+            config['bluemap_enabled'] = request.form.get('bluemap_enabled') == 'true'
         config['accent'] = accent
         config['server_name'] = server_name
         config['panel_name'] = 'Byte Panel'
@@ -1573,13 +1644,17 @@ def settings():
         config['auto_backup_enabled'] = request.form.get('auto_backup_enabled') == 'true'
         config['auto_backup_freq'] = request.form.get('auto_backup_freq', config.get('auto_backup_freq', 'weekly'))
         config['auto_backup_keep'] = int(request.form.get('auto_backup_keep', config.get('auto_backup_keep', 5)))
+        if 'backup_settings_present' in request.form:
+            config['backup_shutdown'] = request.form.get('backup_shutdown') == 'true'
+        if 'automation_settings_present' in request.form:
+            config['auto_start'] = request.form.get('auto_start') == 'true'
+            config['auto_restart'] = request.form.get('auto_restart') == 'true'
         # Accept the legacy field for an already-open Settings page, but use the
         # same validation and canonical server file for both upload names.
         icon_upload = request.files.get('server_icon') or request.files.get('custom_logo')
         if icon_upload and icon_upload.filename:
             try:
-                with server_backups.exclusive():
-                    save_server_icon(icon_upload.stream, SERVER_DIR)
+                save_server_icon(icon_upload.stream, SERVER_DIR)
             except (ServerIconError, BackupBusy) as error:
                 return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
                                        settings_error=str(error)), 409 if isinstance(error, BackupBusy) else 400
@@ -1587,18 +1662,26 @@ def settings():
                 app.logger.exception('Could not save server icon')
                 return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
                                        settings_error='Could not save the server icon. Check disk space and server-folder permissions.'), 500
-            settings_message = 'Settings saved. Server icon updated in the panel. Restart Minecraft, then refresh the multiplayer list to see it there.'
+            settings_message = 'Settings saved. Server icon updated on the sign-in screen and in the server badge. Restart Minecraft, then refresh the multiplayer list to see it there. The Byte Panel navigation logo is unchanged.'
         if 'custom_favicon' in request.files and request.files['custom_favicon'].filename:
             request.files['custom_favicon'].save(os.path.join(BRANDING_DIR, 'favicon.ico'))
         if 'custom_bg' in request.files and request.files['custom_bg'].filename:
             request.files['custom_bg'].save(os.path.join(BRANDING_DIR, 'bg.jpg'))
             
-        save_config(config)
+        with CONFIG_LOCK:
+            current = load_config()
+            for key in ('is_running', 'server_pid', 'target_state'):
+                if key in current:
+                    config[key] = current[key]
+            save_config(config)
+        if 'automation_settings_present' in request.form and not config['auto_restart']:
+            server_automation.cancel_pending_restart()
     
     return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
                            settings_message=settings_message)
 
 @app.route('/start', methods=['POST'])
+@exclusive_server_files
 def start_server():
     # Only try to start if it isn't already running
     config = load_config()
@@ -1608,6 +1691,7 @@ def start_server():
 
 # --- Process Lifecycle Infrastructure API Rules ---
 @app.route('/api/server/<action>', methods=['POST'])
+@exclusive_server_files
 def server_action(action):
     global MINECRAFT_PROCESS
     if action == "start":
@@ -1625,13 +1709,14 @@ def server_action(action):
         with open(log_path, "a", encoding='utf-8') as f:
             f.write("[Action] Server restarting.\n")
             f.flush()
+        process, reader = MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
         stop_minecraft_server()
-        if MINECRAFT_PROCESS:
-            try:
-                MINECRAFT_PROCESS.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                MINECRAFT_PROCESS.kill()
-        start_minecraft_server()
+        try:
+            wait_for_minecraft_shutdown(process, reader)
+        except (RuntimeError, OSError, psutil.Error) as error:
+            return jsonify(status='error', message=str(error)), 409
+        if not start_minecraft_server():
+            return jsonify(status='error', message='Minecraft could not restart. Check the console.'), 409
         return jsonify({"status": "restarted"})
 
 def create_backup(server_name, is_manual, is_initial=False, is_restore_backup=False):
@@ -1663,10 +1748,29 @@ def backup_scheduler():
                 elif freq == 'monthly' and (now - last_run) >= 2592000:
                     should_run = True
                     
-                if should_run:
-                    create_backup(config.get('server_name'), is_manual=False)
+                # A persistent failure must not bounce an online server every minute.
+                cooldown = (config.get('backup_shutdown') is True and
+                            now - config.get('last_auto_backup_attempt', 0) < 3600)
+                if should_run and not cooldown:
+                    try:
+                        create_backup(config.get('server_name'), is_manual=False)
+                    except BackupBusy:
+                        raise
+                    except BackupCompletedError:
+                        # The archive is valid even if the server did not restart.
+                        config = load_config()
+                        config['last_auto_backup'] = now
+                        config['last_auto_backup_attempt'] = now
+                        save_config(config)
+                        raise
+                    except Exception:
+                        config = load_config()
+                        config['last_auto_backup_attempt'] = now
+                        save_config(config)
+                        raise
                     config = load_config()
                     config['last_auto_backup'] = now
+                    config['last_auto_backup_attempt'] = now
                     save_config(config)
         except BackupBusy:
             pass  # Retry next minute; do not change the last successful backup time.
@@ -1693,6 +1797,10 @@ def api_create_backup():
                         "server_key": os.path.basename(os.path.dirname(zip_path))})
     except BackupBusy as e:
         return jsonify(status='error', message=str(e)), 409
+    except BackupCompletedError as e:
+        app.logger.exception('Backup created, but server recovery failed')
+        return jsonify(status='error', message=str(e), backup_created=True,
+                       file=os.path.basename(e.path), server_key=os.path.basename(os.path.dirname(e.path))), 500
     except Exception as e:
         app.logger.exception('Manual server backup failed')
         return jsonify(status='error', message=backup_error(e)), 500
@@ -1709,6 +1817,7 @@ def api_backup_status(job_id):
 @exclusive_server_files
 def purge_server():
     global MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
+    server_automation.stop()
     # stop_minecraft_server sends a command; it does not wait for process exit.
     # Drain the old log reader before clearing records, or buffered logins can
     # recreate players after the purge has reported success.
@@ -1764,6 +1873,9 @@ def purge_server():
     # Reset internal panel ecosystem configuration
     config = load_config()
     config['is_setup'] = False
+    config['bluemap_enabled'] = False
+    config['auto_start'] = False
+    config['auto_restart'] = False
     config['log_session_counter'] = 0
     config['mc_version'] = None
     config['server_type'] = None
@@ -1824,11 +1936,18 @@ def import_server():
         os.remove(temp_zip)
         return jsonify({"missing_engine_info": True})
         
-    if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
-        stop_minecraft_server()
-        time.sleep(2)
-        
-    # Wipe current server files to prepare for clean extraction
+    server_automation.stop()
+    process, reader = MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
+    pid = load_config().get('server_pid')
+    try:
+        if ((process and process.poll() is None) or (pid and psutil.pid_exists(pid))):
+            if not stop_minecraft_server():
+                return jsonify(error='Unable to stop Minecraft. No server files were replaced.'), 409
+        wait_for_minecraft_shutdown(process, reader)
+    except (RuntimeError, OSError, psutil.Error) as error:
+        return jsonify(error=str(error)), 409
+
+    # Wipe current server files only after shutdown and log activity are complete.
     for filename in os.listdir(SERVER_DIR):
         file_path = os.path.join(SERVER_DIR, filename)
         try:
@@ -1895,7 +2014,10 @@ def import_server():
     config['is_running'] = False
     config['server_pid'] = None
     
+    config['bluemap_enabled'] = False
     # A replacement is a new server scope, never an import of old accounts.
+    config['auto_start'] = False
+    config['auto_restart'] = False
     actor = security.store.reset(keep_actor=g.panel_user)
     security.store.sign_in(session, actor)
         
@@ -1933,17 +2055,22 @@ def api_stats():
             cpu = p.cpu_percent(interval=0.05)
             ram = p.memory_info().rss / (1024 * 1024)
         except psutil.NoSuchProcess: pass
-    else:
-        state_changed = False
-        if target_state != "Offline":
-            config['target_state'] = "Offline"
-            state_changed = True
-        if config.get('is_running') or config.get('server_pid'):
-            config['is_running'] = False
-            config['server_pid'] = None
-            state_changed = True
-        if state_changed:
-            save_config(config)
+    elif config.get('server_pid') and psutil.pid_exists(config['server_pid']):
+        # Never erase a live unmanaged PID: offline backups must fail safely for it.
+        status = 'Online'
+    elif not server_backups.lock.locked():
+        # Recheck while holding the operation lock: a start/stop or Settings save
+        # may have begun since the status snapshot above.
+        try:
+            with server_backups.exclusive():
+                current = load_config()
+                live = MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None
+                saved_live = current.get('server_pid') and psutil.pid_exists(current['server_pid'])
+                if not live and not saved_live and (current.get('target_state') != 'Offline'
+                                                    or current.get('is_running') or current.get('server_pid')):
+                    mark_minecraft_offline()
+        except BackupBusy:
+            pass
             
     return jsonify({"status": status, "cpu": f"{cpu:.1f}%", "ram": f"{ram:.1f} MB", "tps": "20.0" if status == "Online" else "0.0"})
 
@@ -1975,30 +2102,91 @@ def socket_disconnect(reason=None):
     with security.lock:
         security.socket_clients.pop(request.sid, None)
 
+def normalize_console_command(payload):
+    """Accept an optional leading slash without rewriting plugin prefixes or arguments."""
+    if not isinstance(payload, dict) or not isinstance(payload.get('command'), str):
+        raise ValueError('Enter a server command.')
+    command = payload['command']
+    if any(character in command for character in ('\r', '\n', '\x00')):
+        raise ValueError('Enter one command at a time, without line breaks or null characters.')
+    command = command.strip()
+    if command in ('', '/'):
+        raise ValueError('Enter a server command.')
+    # Preserve explicit prefixes (including // plugin commands) exactly as entered.
+    if command.startswith('/'):
+        return command
+    config = load_config()
+    version = re.fullmatch(r'(\d+)\.(\d+)(?:\.(\d+))?', str(config.get('mc_version', '')))
+    # Modern Paper/Purpur use performPrefixedCommand. Older releases dispatch
+    # raw command names and can reject /help; keep their native console format.
+    if config.get('server_type') in ('Paper', 'Purpur') and version:
+        parts = tuple(int(part or 0) for part in version.groups())
+        if parts >= (1, 21, 8):
+            return '/' + command
+    return command
+
+
+def mark_intentional_console_shutdown(command):
+    name = command[1:] if command.startswith('/') else command
+    name = name.split(None, 1)[0].lower()
+    if name in ('stop', 'minecraft:stop', 'bukkit:stop', 'restart', 'bukkit:restart', 'spigot:restart'):
+        server_automation.stop()
+        if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
+            # A shutdown backup must not mistake this intentional console stop
+            # for a server it should stop and then bring back online.
+            with CONFIG_LOCK:
+                config = load_config()
+                config['target_state'] = 'Shutting Down'
+                save_config(config)
+
+
 @socketio.on('send_command')
-def handle_command(payload):
+def handle_command(payload=None):
     global MINECRAFT_PROCESS
     if 'console.command' not in session_grants(security.current_user()):
         return {'error': 'You do not have permission to run console commands.'}
-    if not isinstance(payload, dict) or not isinstance(payload.get('command'), str):
-        return {'error': 'Invalid command.'}
-    if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
-        cmd_str = payload.get('command', '') + "\n"
-        MINECRAFT_PROCESS.stdin.write(cmd_str)
-        MINECRAFT_PROCESS.stdin.flush()
+    try:
+        command = normalize_console_command(payload)
+    except ValueError as error:
+        return {'error': str(error)}
+    try:
+        with server_backups.exclusive():
+            mark_intentional_console_shutdown(command)
+            if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
+                MINECRAFT_PROCESS.stdin.write(command + "\n")
+                MINECRAFT_PROCESS.stdin.flush()
+                return {'status': 'success'}
+            return {'error': 'Server offline'}
+    except BackupBusy as error:
+        return {'error': str(error)}
+    except (OSError, ValueError):
+        return {'error': 'Could not send the command. The server connection is closed.'}
 
 @app.route('/api/command', methods=['POST'])
+@exclusive_server_files
 def handle_api_command():
     global MINECRAFT_PROCESS
-    payload = request.get_json() or {}
+    try:
+        command = normalize_console_command(request.get_json(silent=True))
+    except ValueError as error:
+        return jsonify({'status': 'error', 'message': str(error)}), 400
+    mark_intentional_console_shutdown(command)
     if MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None:
-        cmd_str = payload.get('command', '') + "\n"
-        MINECRAFT_PROCESS.stdin.write(cmd_str)
-        MINECRAFT_PROCESS.stdin.flush()
+        try:
+            MINECRAFT_PROCESS.stdin.write(command + "\n")
+            MINECRAFT_PROCESS.stdin.flush()
+        except (OSError, ValueError):
+            return jsonify({'status': 'error', 'message': 'Could not send the command. The server connection is closed.'}), 409
         return jsonify({"status": "success"})
     return jsonify({"status": "error", "message": "Server offline"})
 
 if __name__ == '__main__':
+    # Only the actual panel process owns the automation thread; imports/tests
+    # must never start Minecraft or a duplicate monitor.
+    automation_stop = threading.Event()
+    automation_thread = threading.Thread(target=server_automation.run, args=(automation_stop,),
+                                         name='minecraft-automation', daemon=True)
+    automation_thread.start()
     # Start backup scheduler thread
     import threading
     scheduler_thread = threading.Thread(target=backup_scheduler, daemon=True)

@@ -3,8 +3,8 @@
 <a href="#panel-content" class="skip-link">Skip to content</a>
 <button class="sidebar-overlay" id="sidebar-overlay" type="button" aria-label="Close navigation" hidden></button>
 <aside class="sidebar panel-sidebar" id="panel-sidebar" aria-label="Application sidebar">
-    <div class="sidebar-brand"><a href="{{ '/account' if restricted else '/overview' }}" aria-label="Byte Panel home">{% if has_custom is defined and has_custom.logo %}<img class="brand-logo" src="/branding-assets/logo.png" alt="">{% else %}{{ brand() }}{% endif %}<span>Byte Panel<small>SERVER MANAGEMENT</small></span></a><button type="button" class="icon-button sidebar-close" id="sidebar-close" aria-label="Close navigation">{{ icon('close') }}</button></div>
-    <div class="sidebar-server"><span class="server-icon">{% if has_custom is defined and has_custom.logo %}<img src="/branding-assets/logo.png" alt="">{% else %}{{ icon('server') }}{% endif %}</span><div><strong>{{ config.get('server_name') or 'Your server' }}</strong><span>{{ config.get('server_type') or 'Server' }}{% if config.get('mc_version') %} <span class="server-version">{{ config.mc_version }}</span>{% endif %}</span></div><span class="state-dot" data-server-dot data-state="unknown" aria-label="Server status unknown"></span></div>
+    <div class="sidebar-brand"><a href="{{ '/account' if restricted else '/overview' }}" aria-label="Byte Panel home">{{ brand() }}<span>Byte Panel<small>SERVER MANAGEMENT</small></span></a><button type="button" class="icon-button sidebar-close" id="sidebar-close" aria-label="Close navigation">{{ icon('close') }}</button></div>
+    <div class="sidebar-server"><span class="server-icon">{% if has_custom is defined and has_custom.server_icon %}<img src="/branding-assets/server-icon.png" alt="">{% else %}{{ icon('server') }}{% endif %}</span><div><strong>{{ config.get('server_name') or 'Your server' }}</strong><span>{{ config.get('server_type') or 'Server' }}{% if config.get('mc_version') %} <span class="server-version">{{ config.mc_version }}</span>{% endif %}</span></div><span class="state-dot" data-server-dot data-state="unknown" aria-label="Server status unknown"></span></div>
     <nav class="nav-group" aria-label="Panel navigation">
         {% if not restricted %}
         <div class="nav-label">SERVER</div>
@@ -14,6 +14,7 @@
         <a href="{{ path }}" class="nav-link{% if request.path == path %} active{% endif %}"{% if request.path == path %} aria-current="page"{% endif %}>{{ icon(glyph) }}<span>{{ label }}</span></a>
         {% endif %}
         {% endfor %}
+        {% if config.get('bluemap_enabled') %}<a href="/map/" class="nav-link" target="_blank" rel="noopener">{{ icon('map') }}<span>Map</span></a>{% endif %}
         {% if can is not defined or can('settings.manage') or can('users.manage') %}<div class="nav-label admin-label">ADMINISTRATION</div>{% endif %}
         {% if can is not defined or can('settings.manage') %}<a href="/settings" class="nav-link{% if request.path == '/settings' %} active{% endif %}"{% if request.path == '/settings' %} aria-current="page"{% endif %}>{{ icon('settings') }}<span>Panel Settings</span></a>{% endif %}
         {% if can is defined and can('users.manage') %}<a href="/users" class="nav-link{% if request.path == '/users' %} active{% endif %}"{% if request.path == '/users' %} aria-current="page"{% endif %}>{{ icon('shield') }}<span>Panel Users</span></a>{% endif %}
@@ -21,6 +22,6 @@
     </nav>
     <footer class="sidebar-footer">
         <div class="profile-row"><a href="/account" class="profile-control{% if request.path == '/account' %} active{% endif %}" aria-label="My account: {{ current_user.username if current_user is defined and current_user else config.admin_user }}"><span class="profile-avatar">{{ icon('user') }}</span><span><strong>{{ current_user.username if current_user is defined and current_user else config.admin_user }}</strong><small>{{ current_user.role | title if current_user is defined and current_user else 'Account' }}</small></span></a><a href="/logout" class="icon-button" aria-label="Sign out" title="Sign out">{{ icon('logout') }}</a></div>
-        <div class="sidebar-version"><span>Byte Panel</span><span>{{ app_version }}</span></div>
+        <div class="sidebar-version"><span>{{ app_version }}</span></div>
     </footer>
 </aside>

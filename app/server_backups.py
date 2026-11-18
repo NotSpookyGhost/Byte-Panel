@@ -1,6 +1,6 @@
-"""Atomic server archives and short-request backup jobs (no Minecraft process changes)."""
+"""Atomic server archives and short-request jobs with optional offline lifecycle hooks."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 import errno
 import json
@@ -27,6 +27,15 @@ class BackupBusy(RuntimeError):
     pass
 
 
+class BackupCompletedError(RuntimeError):
+    """The ZIP exists, but post-backup recovery failed; never imply it was lost."""
+    def __init__(self, path, error):
+        self.path = str(path)
+        message = str(error)
+        super().__init__(message if message.startswith('Backup created') else
+                         'Backup created, but server recovery failed: ' + message)
+
+
 def backup_error(error):
     if isinstance(error, OSError):
         if error.errno in (errno.ENOSPC, getattr(errno, 'EDQUOT', errno.ENOSPC)):
@@ -39,11 +48,12 @@ def backup_error(error):
 
 
 class ServerBackups:
-    def __init__(self, data_dir, server_dir, load_config, logger):
+    def __init__(self, data_dir, server_dir, load_config, logger, backup_context=None):
         self.data = Path(data_dir)
         self.server = Path(server_dir)
         self.load_config = load_config
         self.logger = logger
+        self.backup_context = backup_context
         self.lock = threading.Lock()
         self.jobs_lock = threading.Lock()
         self.jobs = {}
@@ -59,7 +69,24 @@ class ServerBackups:
 
     def create(self, server_name, is_manual, is_initial=False, is_restore_backup=False):
         with self.exclusive():
-            return self._archive(server_name, is_manual, is_initial, is_restore_backup)
+            return self._create(server_name, is_manual, is_initial, is_restore_backup)
+
+    def _create(self, server_name, is_manual, is_initial=False, is_restore_backup=False, progress=None):
+        # All callers already hold the reservation, including during stop and recovery.
+        progress = progress or (lambda **values: None)
+        shutdown = self.load_config().get('backup_shutdown') is True and not is_initial
+        if shutdown and self.backup_context is None:
+            raise RuntimeError('Offline backup mode is unavailable. Stop Minecraft manually before backing up.')
+        context = self.backup_context(progress) if shutdown else nullcontext()
+        path = None
+        try:
+            with context:
+                path = self._archive(server_name, is_manual, is_initial, is_restore_backup, progress=progress)
+        except Exception as error:
+            if path is not None:
+                raise BackupCompletedError(path, error) from error
+            raise
+        return path
 
     def status(self, job_id, scope):
         with self.jobs_lock:
@@ -95,7 +122,7 @@ class ServerBackups:
 
     def _run(self, job_id, is_restore):
         try:
-            path = self._archive(self.load_config().get('server_name', 'Server'), True,
+            path = self._create(self.load_config().get('server_name', 'Server'), True,
                                  is_restore_backup=is_restore,
                                  progress=lambda **values: self._update(job_id, **values))
             result = dict(status='success', file=os.path.basename(path), server_key=Path(path).parent.name,
@@ -103,6 +130,9 @@ class ServerBackups:
         except Exception as error:
             self.logger.exception('Server backup failed (job %s)', job_id)
             result = dict(status='error', message=backup_error(error))
+            if isinstance(error, BackupCompletedError):
+                result.update(backup_created=True, file=Path(error.path).name,
+                              server_key=Path(error.path).parent.name)
         finally:
             self.lock.release()
         # A successful status guarantees a completed ZIP and released filesystem lock.

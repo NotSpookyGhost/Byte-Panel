@@ -28,6 +28,7 @@ from panel_accounts import (AccountStore, PERMISSIONS, grants, hash_password, TE
                             PASSWORD_RULES, PASSWORD_PATTERN, validate_password)
 from panel_mail import DEFAULT_SMTP
 from panel_security import PanelSecurity, ROUTE_PERMISSIONS, SETUP_ROUTES
+from bluemap import MAP_ENDPOINTS
 
 
 class AccountIntegrationTests(unittest.TestCase):
@@ -56,6 +57,7 @@ class AccountIntegrationTests(unittest.TestCase):
         self.addCleanup(delay.stop)
         self.module.MINECRAFT_PROCESS = None
         self.module.MINECRAFT_LOG_THREAD = None
+        self.module.server_automation.stop()
         self.module.SETUP_PROGRESS.update(percent=0, msg='Ready', status='idle')
         self.module.clear_player_data()
         self.store.reset()
@@ -108,12 +110,30 @@ class AccountIntegrationTests(unittest.TestCase):
                 nav = page.split('<nav class="nav-group"')[1].split('</nav>')[0]
                 self.assertNotIn('href="/account"', nav)
                 self.assertIn('class="profile-control', page)
+                version_markup = page.split('<div class="sidebar-version">')[1].split('</div>')[0]
+                class VersionText(HTMLParser):
+                    def __init__(self):
+                        super().__init__()
+                        self.text = []
+
+                    def handle_data(self, text):
+                        self.text.append(text)
+                version = VersionText()
+                version.feed(version_markup)
+                expected = self.module.inject_version()['app_version']
+                self.assertEqual(''.join(version.text).strip(), expected)
+                self.assertNotIn('Byte Panel', version_markup)
         login = self.app.test_client().get('/login').get_data(as_text=True)
         self.assertIn('page-login', login)
         self.assertNotIn('id="panel-sidebar"', login)
         self.assertNotIn('class="panel-header"', login)
+        self.assertNotIn('class="login-brand"', login)
+        self.assertNotIn('Welcome back', login)
+        card = login.split('<section class="card login-card">')[1].split('</section>')[0]
+        self.assertIn('class="login-server-identity"', card.split('<form')[0])
+        self.assertIn('<h1>Test Server</h1>', card)
 
-    def test_sidebar_brand_uses_uploaded_logo_or_closed_default_mark(self):
+    def test_sidebar_brand_is_fixed_and_login_ignores_legacy_panel_logo(self):
         logo = self.data / 'branding' / 'logo.png'
         self.assertFalse(logo.exists(), 'Test fixture must start without a custom logo')
         page = self.client.get('/overview').get_data(as_text=True)
@@ -127,9 +147,30 @@ class AccountIntegrationTests(unittest.TestCase):
             with self.subTest(path=path):
                 page = self.client.get(path).get_data(as_text=True)
                 brand = page.split('<div class="sidebar-brand">')[1].split('<div class="sidebar-server">')[0]
-                self.assertIn('class="brand-logo" src="/branding-assets/logo.png"', brand)
-                self.assertNotIn('class="brand-mark"', brand)
+                self.assertIn('class="brand-mark"', brand)
+                self.assertNotIn('branding-assets', brand)
                 self.assertIn('Byte Panel', brand)
+        login = self.app.test_client().get('/login').get_data(as_text=True)
+        self.assertNotIn('class="brand-mark"', login)
+        self.assertNotIn('/branding-assets/logo.png', login)
+        self.assertNotIn('/branding-assets/server-icon.png', login)
+        identity = login.split('class="login-server-identity"')[1].split('</h1>')[0]
+        self.assertIn('M3 3h18v7H3z M3 14h18v7H3z', identity)
+        self.assertIn('<h1>Test Server', identity)
+
+    def test_login_server_identity_escapes_name_inside_the_card(self):
+        name = 'Friends <img src=x onerror=alert(1)> & "Players"'
+        self.config['server_name'] = name
+        self.module.save_config(self.config)
+        login = self.app.test_client().get('/login').get_data(as_text=True)
+        before_card, card = login.split('<section class="card login-card">', 1)
+        self.assertNotIn('class="login-server-identity"', before_card)
+        self.assertNotIn('class="login-brand"', login)
+        heading = card.split('<h1>')[1].split('</h1>')[0]
+        self.assertEqual(html.unescape(heading), name)
+        self.assertNotIn('<img', heading)
+        self.assertIn('&lt;img', heading)
+        self.assertNotIn('Welcome back', card)
 
     def test_server_icon_control_is_in_general_not_appearance(self):
         page = self.client.get('/settings').get_data(as_text=True)
@@ -161,25 +202,40 @@ class AccountIntegrationTests(unittest.TestCase):
             self.assertEqual(image.format, 'PNG')
         self.assertTrue(self.module.get_custom_assets_state()['server_icon'])
         self.assertFalse((self.data / 'branding' / 'logo.png').exists())
-        response = self.client.get('/branding-assets/logo.png')
+        response = self.client.get('/branding-assets/server-icon.png')
         try:
             self.assertEqual(response.data, original)
             self.assertIn('no-store', response.headers['Cache-Control'])
         finally:
             response.close()
-        for path in ('/overview', '/login', '/settings'):
-            self.assertIn('/branding-assets/logo.png', self.client.get(path).get_data(as_text=True))
+        for path in ('/overview', '/settings'):
+            page = self.client.get(path).get_data(as_text=True)
+            self.assertIn('/branding-assets/server-icon.png', page)
+            brand = page.split('<div class="sidebar-brand">')[1].split('<div class="sidebar-server">')[0]
+            self.assertIn('class="brand-mark"', brand)
+            self.assertNotIn('branding-assets', brand)
+        login = self.app.test_client().get('/login').get_data(as_text=True)
+        card_heading = login.split('<section class="card login-card">')[1].split('<form')[0]
+        identity = card_heading.split('class="login-server-identity"')[1].split('</h1>')[0]
+        self.assertIn('src="/branding-assets/server-icon.png"', identity)
+        self.assertIn('<h1>Test Server', identity)
+        self.assertNotIn('<svg', identity)
+        self.assertNotIn('class="login-brand"', login)
         backup = self.client.post('/api/backup/create', headers=self.headers()).json
         with zipfile.ZipFile(self.data / 'backups' / backup['server_key'] / backup['file']) as archive:
             self.assertEqual(archive.read('server-icon.png'), original)
             self.assertFalse(any(name.endswith('.tmp') for name in archive.namelist()))
         self.assertEqual(self.upload_test_icon(image_bytes(color='red')).status_code, 200)
         self.assertNotEqual(icon.read_bytes(), original)
+        config = self.module.load_config()
+        config['bluemap_enabled'] = True
+        self.module.save_config(config)
         restored = self.client.post('/api/backup/restore', json={
             'server_name': backup['server_key'], 'filename': backup['file']}, headers=self.headers())
         self.assertEqual(restored.status_code, 200, restored.json)
+        self.assertFalse(self.module.load_config()['bluemap_enabled'])
         self.assertEqual(icon.read_bytes(), original)
-        response = self.client.get('/branding-assets/logo.png')
+        response = self.client.get('/branding-assets/server-icon.png')
         try:
             self.assertEqual(response.data, original)
         finally:
@@ -224,6 +280,52 @@ class AccountIntegrationTests(unittest.TestCase):
             self.assertFalse((self.root / 'server-icon.png').exists())
         self.assertEqual(self.upload_test_icon(image_bytes(), field='custom_logo').status_code, 200)
         self.assertTrue((self.root / 'server-icon.png').is_file())
+
+    def test_bluemap_settings_are_explicit_validated_and_permission_protected(self):
+        original = self.module.load_config()
+        self.assertFalse(original['bluemap_enabled'])
+        self.assertNotIn('href="/map/"', self.client.get('/overview').get_data(as_text=True))
+        for value in ('5000', '80', '65536', 'http://example.com', '8100/path', '-1'):
+            response = self.client.post('/settings', data={'bluemap_port': value,
+                'bluemap_settings_present': '1', 'bluemap_enabled': 'true'}, headers=self.headers())
+            self.assertEqual(response.status_code, 400, value)
+            self.assertEqual(self.module.load_config(), original)
+        viewer = self.client_for(self.create())
+        response = viewer.post('/settings', data={'bluemap_settings_present': '1',
+            'bluemap_enabled': 'true'}, headers=self.headers(viewer))
+        self.assertEqual(response.status_code, 403)
+        response = self.client.post('/settings', data={'bluemap_port': '8101',
+            'bluemap_settings_present': '1', 'bluemap_enabled': 'true'}, headers=self.headers())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.module.load_config()['bluemap_port'], 8101)
+        self.assertTrue(self.module.load_config()['bluemap_enabled'])
+        self.assertIn('href="/map/"', self.client.get('/overview').get_data(as_text=True))
+        # Older forms/partial updates don't silently disable the public map.
+        self.client.post('/settings', data={'accent': 'blue'}, headers=self.headers())
+        self.assertTrue(self.module.load_config()['bluemap_enabled'])
+        self.client.post('/settings', data={'bluemap_settings_present': '1'}, headers=self.headers())
+        self.assertFalse(self.module.load_config()['bluemap_enabled'])
+
+    def test_public_map_is_separate_from_panel_auth_and_disabled_before_setup(self):
+        public = self.app.test_client()
+        self.assertEqual(public.get('/map').status_code, 404)
+        self.config['bluemap_enabled'] = True
+        self.module.save_config(self.config)
+        response = public.get('/map?world=overworld', base_url='https://mc.bytedev.app')
+        self.assertEqual(response.status_code, 308)
+        self.assertEqual(response.headers['Location'], '/map/?world=overworld')
+        self.assertNotIn('Set-Cookie', response.headers)
+        with patch('bluemap.requests.Session.request', side_effect=self.module.requests.ConnectionError):
+            response = public.get('/map/maps/world/live/players.json')
+        self.assertEqual(response.status_code, 503)  # not a panel-login redirect
+        self.assertNotIn('admin_user', response.get_data(as_text=True))
+        self.assertEqual(public.get('/api/stats').status_code, 401)
+        self.assertEqual(public.get('/settings').status_code, 302)
+        self.assertEqual(public.post('/map/').status_code, 405)
+        self.config['is_setup'] = False
+        self.module.save_config(self.config)
+        self.assertEqual(public.get('/map/').status_code, 404)
+        self.assertEqual(public.get('/map/assets/main.js').status_code, 404)
 
     def test_obsidian_settings_persist_accent_and_server_name_not_product_brand(self):
         self.config.update(auto_backup_freq='6_hours', java_path='/configured/java')
@@ -278,7 +380,7 @@ class AccountIntegrationTests(unittest.TestCase):
         self.assertIn('Player-history permission is required', restricted)
 
     def test_all_routes_have_explicit_access_policy(self):
-        known = set(ROUTE_PERMISSIONS) | SETUP_ROUTES | {'static', 'serve_custom_branding', 'login'}
+        known = set(ROUTE_PERMISSIONS) | SETUP_ROUTES | MAP_ENDPOINTS | {'static', 'serve_custom_branding', 'login'}
         self.assertEqual({rule.endpoint for rule in self.app.url_map.iter_rules()} - known, set())
 
     def test_live_versions_endpoint_and_invalid_setup_selection(self):
@@ -920,7 +1022,7 @@ class AccountIntegrationTests(unittest.TestCase):
             first = smtp.send_message.call_args_list[0].args[0]
             self.assertIn('Byte Community', first['Subject'])
             for kind in ('plain', 'html'):
-                self.assertIn('Welcome to Byte Community!', first.get_body(preferencelist=(kind,)).get_content())
+                self.assertIn('Welcome to Byte Community', first.get_body(preferencelist=(kind,)).get_content())
                 self.assertNotIn('Legacy Panel Branding', first.get_body(preferencelist=(kind,)).get_content())
             self.config['server_name'] = 'Renamed Community'
             self.module.save_config(self.config)
@@ -932,7 +1034,7 @@ class AccountIntegrationTests(unittest.TestCase):
             resent = smtp.send_message.call_args_list[2].args[0]
             self.assertIn('Renamed Community', resent['Subject'])
             for kind in ('plain', 'html'):
-                self.assertIn('Welcome to Renamed Community!', resent.get_body(preferencelist=(kind,)).get_content())
+                self.assertIn('Welcome to Renamed Community', resent.get_body(preferencelist=(kind,)).get_content())
                 self.assertNotIn('{{servername}}', resent.get_body(preferencelist=(kind,)).get_content())
             self.assertIn('Renamed Community', smtp.send_message.call_args_list[3].args[0]['Subject'])
         page = self.client.get('/settings').get_data(as_text=True)
@@ -974,6 +1076,44 @@ class AccountIntegrationTests(unittest.TestCase):
             self.assertFalse(result.json['success'])
             self.assertEqual(result.json['error_code'], 'connection_failed')
             self.assertNotIn('smtp-private-secret', result.get_data(as_text=True))
+
+    def test_welcome_embeds_active_server_icon_and_resend_uses_current_icon(self):
+        from PIL import Image
+        from test_server_icon import image_bytes
+        self.smtp()
+        self.assertEqual(self.upload_test_icon(image_bytes(size=(64, 64), color='red')).status_code, 200)
+        with patch('panel_mail.smtplib.SMTP') as factory:
+            smtp = self.prepare_smtp_mock(factory)
+            result = self.client.post('/api/users', json=dict(username='iconinvite', email='new@example.com'),
+                                      headers=self.headers())
+            self.assertEqual(result.status_code, 201)
+            self.assertEqual(result.json['email_status'], 'sent')
+            welcome, password = [call.args[0] for call in smtp.send_message.call_args_list]
+            images = [part for part in welcome.walk() if part.get_content_type() == 'image/png']
+            self.assertEqual(len(images), 1)
+            cid = str(images[0]['Content-ID'])[1:-1]
+            markup = welcome.get_body(preferencelist=('html',)).get_content()
+            self.assertIn('src="cid:' + cid + '"', markup)
+            self.assertLess(markup.index('src="cid:'), markup.index('Welcome to Test Server'))
+            with Image.open(io.BytesIO(images[0].get_payload(decode=True))) as image:
+                self.assertEqual(image.size, (64, 64))
+                self.assertEqual(image.getpixel((32, 32)), (255, 0, 0, 255))
+            self.assertEqual(images[0].get_content_disposition(), 'inline')
+            self.assertNotIn('image/png', [part.get_content_type() for part in password.walk()])
+            temporary = password.get_body(preferencelist=('plain',)).get_content().split('Temporary password: ')[1].splitlines()[0]
+            self.assertNotIn(temporary, welcome.get_body(preferencelist=('plain',)).get_content())
+            self.assertNotIn(html.escape(temporary), markup)
+            self.assertNotIn('cid:', welcome.get_body(preferencelist=('plain',)).get_content())
+            self.assertNotIn('cid:', password.get_body(preferencelist=('html',)).get_content())
+            self.mail_delay.assert_called_once_with(12)
+            self.assertEqual(self.upload_test_icon(image_bytes(size=(64, 64), color='blue')).status_code, 200)
+            resend = self.client.post('/api/users/' + result.json['user']['id'] + '/invite', json={}, headers=self.headers())
+            self.assertEqual(resend.status_code, 200)
+            resent = smtp.send_message.call_args_list[2].args[0]
+            new_icon = next(part for part in resent.walk() if part.get_content_type() == 'image/png')
+            self.assertNotEqual(new_icon['Content-ID'], images[0]['Content-ID'])
+            with Image.open(io.BytesIO(new_icon.get_payload(decode=True))) as image:
+                self.assertEqual(image.getpixel((32, 32)), (0, 0, 255, 255))
 
     def test_password_email_failure_reports_partial_delivery_without_leaking_secrets(self):
         self.smtp()
@@ -1506,6 +1646,457 @@ class AccountIntegrationTests(unittest.TestCase):
                 self.module.backup_scheduler()
             create.assert_not_called()
 
+    def test_backup_shutdown_setting_is_opt_in_persisted_and_permission_protected(self):
+        self.assertFalse(self.module.load_config()['backup_shutdown'])
+        page = self.client.get('/settings').get_data(as_text=True)
+        self.assertIn('id="backupShutdown"', page.split('id="settings-backups"')[1].split('</section>')[0])
+        result = self.client.post('/settings', data={'backup_settings_present': 'true', 'backup_shutdown': 'true'},
+                                  headers=self.headers())
+        self.assertEqual(result.status_code, 200)
+        self.assertTrue(self.module.load_config()['backup_shutdown'])
+        self.client.post('/settings', data={'accent': 'blue'}, headers=self.headers())
+        self.assertTrue(self.module.load_config()['backup_shutdown'], 'Partial/legacy forms must preserve mode')
+        creator = self.client_for(self.create('backupcreator', ['backups.create']))
+        denied = creator.post('/settings', data={'backup_settings_present': 'true'}, headers=self.headers(creator))
+        self.assertEqual(denied.status_code, 403)
+        self.assertTrue(self.module.load_config()['backup_shutdown'])
+        self.client.post('/settings', data={'backup_settings_present': 'true'}, headers=self.headers())
+        self.assertFalse(self.module.load_config()['backup_shutdown'])
+
+    def test_automation_settings_are_opt_in_explicit_and_permission_protected(self):
+        self.assertFalse(self.module.DEFAULT_CONFIG['auto_start'])
+        self.assertFalse(self.module.DEFAULT_CONFIG['auto_restart'])
+        page = self.client.get('/settings').get_data(as_text=True)
+        self.assertIn('name="automation_settings_present"', page)
+        self.assertIn('name="auto_start"', page)
+        self.assertIn('name="auto_restart"', page)
+        form = {'automation_settings_present': 'true', 'auto_start': 'true', 'auto_restart': 'true'}
+        viewer = self.client_for(self.create('automation-viewer', ['server.control']))
+        self.assertEqual(viewer.post('/settings', data=form, headers=self.headers(viewer)).status_code, 403)
+        self.assertEqual(self.client.post('/settings', data=form).status_code, 403)
+        self.assertFalse(self.module.load_config()['auto_start'])
+        self.assertFalse(self.module.load_config()['auto_restart'])
+        with patch.object(self.module, 'start_minecraft_server') as start:
+            result = self.client.post('/settings', data=form, headers=self.headers())
+            self.assertEqual(result.status_code, 200)
+            self.assertTrue(self.module.load_config()['auto_start'])
+            self.assertTrue(self.module.load_config()['auto_restart'])
+            # Legacy and partial forms cannot silently clear either option.
+            result = self.client.post('/settings', data={'accent': 'blue'}, headers=self.headers())
+            self.assertEqual(result.status_code, 200)
+            self.assertTrue(self.module.load_config()['auto_start'])
+            self.assertTrue(self.module.load_config()['auto_restart'])
+            for enabled in ('auto_start', 'auto_restart', None):
+                with self.subTest(enabled=enabled):
+                    form = {'automation_settings_present': 'true'}
+                    if enabled:
+                        form[enabled] = 'true'
+                    result = self.client.post('/settings', data=form, headers=self.headers())
+                    self.assertEqual(result.status_code, 200)
+                    saved = self.module.load_config()
+                    self.assertEqual(saved['auto_start'], enabled == 'auto_start')
+                    self.assertEqual(saved['auto_restart'], enabled == 'auto_restart')
+            start.assert_not_called()
+
+    def test_automation_manual_stop_cancels_even_when_already_offline(self):
+        for path, expected_status in (('/stop', 302), ('/api/server/stop', 200)):
+            with self.subTest(path=path), patch.object(self.module.server_automation, 'stop') as cancel:
+                response = self.client.post(path, headers=self.headers())
+                self.assertEqual(response.status_code, expected_status)
+                cancel.assert_called_once_with()
+
+    def test_automation_manual_stop_cancels_before_shutdown_commands(self):
+        process = Mock(pid=43210)
+        process.poll.return_value = None
+        self.module.MINECRAFT_PROCESS = process
+        self.config.update(server_pid=process.pid, is_running=True)
+        self.module.save_config(self.config)
+        events = []
+        process.stdin.write.side_effect = lambda command: events.append(command)
+        with patch.object(self.module.server_automation, 'stop', side_effect=lambda: events.append('cancel')), \
+             patch.object(self.module.time, 'sleep'):
+            response = self.client.post('/api/server/stop', headers=self.headers())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(events, ['cancel', 'save-all\n', 'stop\n'])
+        self.assertEqual(self.module.load_config()['server_pid'], process.pid,
+                         'A requested stop is not evidence that the process has exited')
+
+    def test_automation_start_refuses_previous_live_log_reader(self):
+        reader = Mock()
+        reader.is_alive.return_value = True
+        self.module.MINECRAFT_LOG_THREAD = reader
+        with patch.object(self.module.subprocess, 'Popen') as launch, \
+             patch.object(self.module.server_automation, 'track') as track:
+            self.assertFalse(self.module.start_minecraft_server())
+            launch.assert_not_called()
+            track.assert_not_called()
+
+    def test_automation_import_and_restore_cancel_policy_and_reset_options(self):
+        self.config.update(auto_start=True, auto_restart=True)
+        self.module.save_config(self.config)
+        archive = self.zip_bytes()
+        with patch.object(self.module.server_automation, 'stop') as cancel:
+            result = self.client.post('/api/import',
+                data={'import_zip': (io.BytesIO(archive), 'automation-server.zip')}, headers=self.headers())
+        self.assertEqual(result.status_code, 200, result.json)
+        cancel.assert_called_once_with()
+        self.assertFalse(self.module.load_config()['auto_start'])
+        self.assertFalse(self.module.load_config()['auto_restart'])
+        backup_dir = self.data / 'backups' / 'Automation_Reset'
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        (backup_dir / 'enabled.zip').write_bytes(archive)
+        saved = self.module.load_config()
+        saved.update(auto_start=True, auto_restart=True)
+        self.module.save_config(saved)
+        with patch.object(self.module.server_automation, 'stop') as cancel:
+            result = self.client.post('/api/backup/restore',
+                json={'server_name': 'Automation_Reset', 'filename': 'enabled.zip'}, headers=self.headers())
+        self.assertEqual(result.status_code, 200, result.json)
+        cancel.assert_called_once_with()
+        self.assertFalse(self.module.load_config()['auto_start'])
+        self.assertFalse(self.module.load_config()['auto_restart'])
+
+    def test_automation_purge_cancels_policy_and_resets_options(self):
+        self.config.update(auto_start=True, auto_restart=True)
+        self.module.save_config(self.config)
+        with patch.object(self.module.server_automation, 'stop') as cancel:
+            result = self.client.post('/api/purge', headers=self.headers())
+        self.assertEqual(result.status_code, 200, result.json)
+        cancel.assert_called_once_with()
+        self.assertFalse(self.module.load_config()['auto_start'])
+        self.assertFalse(self.module.load_config()['auto_restart'])
+        self.assertFalse(self.module.load_config()['is_setup'])
+
+    def test_automation_invalid_import_does_not_cancel_policy_or_clear_options(self):
+        self.config.update(auto_start=True, auto_restart=True)
+        self.module.save_config(self.config)
+        with patch.object(self.module.server_automation, 'stop') as cancel:
+            response = self.client.post('/api/import',
+                data={'import_zip': (io.BytesIO(b'not a zip'), 'broken.zip')}, headers=self.headers())
+        self.assertEqual(response.status_code, 400)
+        cancel.assert_not_called()
+        self.assertTrue(self.module.load_config()['auto_start'])
+        self.assertTrue(self.module.load_config()['auto_restart'])
+
+    def test_automation_pending_restart_is_cancelled_by_stop_or_settings(self):
+        socket_client = self.module.socketio.test_client(self.app, flask_test_client=self.client)
+        self.addCleanup(lambda: socket_client.disconnect() if socket_client.is_connected() else None)
+        for action in ('/stop', '/api/server/stop', 'settings', 'http-console', 'socket-console'):
+            with self.subTest(action=action):
+                self.config.update(auto_restart=True, auto_start=False)
+                self.module.save_config(self.config)
+                now = [0]
+                start = Mock(return_value=True)
+                crashed = Mock()
+                crashed.poll.return_value = 1
+                controller = self.module.ServerAutomation(self.module.load_config, start, lambda: None,
+                    lambda: None, self.module.server_backups.exclusive, Mock(), clock=lambda: now[0])
+                controller.track(crashed)
+                self.assertFalse(controller.tick())
+                start.assert_not_called()
+                with patch.object(self.module, 'server_automation', controller):
+                    if action == 'settings':
+                        result = self.client.post('/settings', data={'automation_settings_present': 'true'},
+                                                  headers=self.headers())
+                        self.assertEqual(result.status_code, 200)
+                        # Re-enabling between monitor ticks must not resurrect the cancelled crash.
+                        result = self.client.post('/settings',
+                            data={'automation_settings_present': 'true', 'auto_restart': 'true'}, headers=self.headers())
+                        self.assertEqual(result.status_code, 200)
+                    elif action == 'http-console':
+                        result = self.client.post('/api/command', json={'command': 'stop'}, headers=self.headers())
+                        self.assertEqual(result.json['status'], 'error')
+                    elif action == 'socket-console':
+                        result = socket_client.emit('send_command', {'command': '/minecraft:stop'}, callback=True)
+                        self.assertIn('error', result)
+                    else:
+                        self.assertIn(self.client.post(action, headers=self.headers()).status_code, (200, 302))
+                    now[0] = 20
+                    self.assertFalse(controller.tick())
+                start.assert_not_called()
+
+    def test_automation_start_tracks_process_before_reader_and_waits_after_stdout_eof(self):
+        for automatic in (False, True):
+            with self.subTest(automatic=automatic):
+                self.module.MINECRAFT_PROCESS = None
+                self.module.MINECRAFT_LOG_THREAD = None
+                self.module.save_config(self.config)
+                process = Mock(pid=43210)
+                process.poll.return_value = None
+                process.stdout = io.StringIO('')
+                events, captured = [], {}
+                reader = Mock()
+                reader.is_alive.return_value = False
+                reader.start.side_effect = lambda: events.append('reader-start')
+                def make_reader(*, target, args, daemon):
+                    self.assertTrue(daemon)
+                    captured.update(target=target, args=args)
+                    return reader
+                def wait_for_exit():
+                    self.assertIs(self.module.MINECRAFT_PROCESS, process)
+                    self.assertEqual(self.module.load_config()['server_pid'], process.pid)
+                    self.assertTrue(self.module.load_config()['is_running'])
+                    events.append('wait')
+                    process.poll.return_value = 0
+                    return 0
+                process.wait.side_effect = wait_for_exit
+                try:
+                    with patch.object(self.module, 'build_server_command', return_value=['java', '-jar', 'server.jar']), \
+                         patch.object(self.module.subprocess, 'Popen', return_value=process), \
+                         patch.object(self.module.time, 'sleep'), \
+                         patch.object(self.module.threading, 'Thread', side_effect=make_reader), \
+                         patch.object(self.module.server_automation, 'track',
+                                      side_effect=lambda *args, **kwargs: events.append('track')) as track:
+                        self.assertTrue(self.module.start_minecraft_server(automatic=automatic))
+                    track.assert_called_once_with(process, automatic=automatic)
+                    self.assertEqual(events, ['track', 'reader-start'])
+                    # Execute the captured reader synchronously; no Java process or background thread is used.
+                    captured['target'](*captured['args'])
+                    self.assertEqual(events, ['track', 'reader-start', 'wait'])
+                    process.wait.assert_called_once_with()
+                    self.assertIsNone(self.module.MINECRAFT_PROCESS)
+                    self.assertFalse(self.module.load_config()['is_running'])
+                    self.assertIsNone(self.module.load_config()['server_pid'])
+                finally:
+                    if captured:
+                        captured['args'][1].close()
+                    process.stdout.close()
+
+    def test_automation_import_refuses_shutdown_timeout_or_active_reader_without_wiping(self):
+        marker = self.root / 'keep-during-shutdown.txt'
+        marker.write_text('unchanged')
+        scope = self.store.scope()
+        for failure in ('process-timeout', 'reader-active', 'detached-timeout'):
+            with self.subTest(failure=failure):
+                process = Mock(pid=43210)
+                process.poll.return_value = None if failure == 'process-timeout' else 0
+                if failure == 'process-timeout':
+                    process.wait.side_effect = subprocess.TimeoutExpired('minecraft', 30)
+                reader = Mock()
+                reader.is_alive.return_value = failure == 'reader-active'
+                detached = Mock()
+                detached.wait.side_effect = self.module.psutil.TimeoutExpired(30)
+                self.module.MINECRAFT_PROCESS = None if failure == 'detached-timeout' else process
+                self.module.MINECRAFT_LOG_THREAD = reader
+                self.config.update(server_pid=43210 if failure == 'detached-timeout' else None)
+                self.module.save_config(self.config)
+                with patch.object(self.module, 'stop_minecraft_server', return_value=True), \
+                     patch.object(self.module.psutil, 'pid_exists', return_value=failure == 'detached-timeout'), \
+                     patch.object(self.module.psutil, 'Process', return_value=detached):
+                    result = self.client.post('/api/import',
+                        data={'import_zip': (io.BytesIO(self.zip_bytes()), 'server.zip')}, headers=self.headers())
+                self.assertEqual(result.status_code, 409, result.json)
+                self.assertEqual(marker.read_text(), 'unchanged')
+                self.assertFalse((self.root / 'server.properties').exists())
+                self.assertEqual(self.store.scope(), scope)
+                process.kill.assert_not_called()
+                detached.kill.assert_not_called()
+                if failure == 'reader-active':
+                    reader.join.assert_called_once_with(timeout=10)
+
+    def test_automation_manual_restart_waits_for_exit_then_reader_before_starting(self):
+        events = []
+        process = Mock(pid=43210)
+        process.poll.return_value = None
+        def exited(timeout):
+            self.assertEqual(timeout, 30)
+            events.append('process-exit')
+            process.poll.return_value = 0
+            return 0
+        process.wait.side_effect = exited
+        reader = Mock()
+        reader.join.side_effect = lambda timeout: events.append('reader-join')
+        reader.is_alive.return_value = False
+        self.module.MINECRAFT_PROCESS = process
+        self.module.MINECRAFT_LOG_THREAD = reader
+        def start_after_shutdown():
+            self.assertIsNone(self.module.MINECRAFT_PROCESS)
+            self.assertIsNone(self.module.MINECRAFT_LOG_THREAD)
+            self.assertIsNone(self.module.load_config()['server_pid'])
+            events.append('start')
+            return True
+        with patch.object(self.module, 'stop_minecraft_server', side_effect=lambda: events.append('stop')), \
+             patch.object(self.module, 'start_minecraft_server', side_effect=start_after_shutdown) as start:
+            result = self.client.post('/api/server/restart', headers=self.headers())
+        self.assertEqual(result.status_code, 200, result.json)
+        self.assertEqual(events, ['stop', 'process-exit', 'reader-join', 'start'])
+        start.assert_called_once_with()
+        reader.join.assert_called_once_with(timeout=10)
+        process.kill.assert_not_called()
+
+    def test_automation_manual_restart_failure_never_kills_or_starts_second_process(self):
+        for failure in ('process-timeout', 'reader-active'):
+            with self.subTest(failure=failure):
+                process = Mock(pid=43210)
+                process.poll.return_value = None if failure == 'process-timeout' else 0
+                if failure == 'process-timeout':
+                    process.wait.side_effect = subprocess.TimeoutExpired('minecraft', 30)
+                reader = Mock()
+                reader.is_alive.return_value = True
+                self.module.MINECRAFT_PROCESS = process
+                self.module.MINECRAFT_LOG_THREAD = reader
+                with patch.object(self.module, 'stop_minecraft_server', return_value=True), \
+                     patch.object(self.module, 'start_minecraft_server') as start:
+                    result = self.client.post('/api/server/restart', headers=self.headers())
+                self.assertEqual(result.status_code, 409, result.json)
+                start.assert_not_called()
+                process.kill.assert_not_called()
+                self.assertIs(self.module.MINECRAFT_PROCESS, process)
+                self.assertIs(self.module.MINECRAFT_LOG_THREAD, reader)
+
+    def test_backup_endpoint_uses_saved_shutdown_mode_and_recovers_after_archive(self):
+        process = Mock(pid=43210)
+        process.poll.return_value = None
+        def stopped(timeout):
+            self.assertEqual(timeout, 180)
+            process.poll.return_value = 0
+            return 0
+        process.wait.side_effect = stopped
+        self.module.MINECRAFT_PROCESS = process
+        self.config.update(backup_shutdown=True, server_pid=process.pid, is_running=True, target_state='Online')
+        self.module.save_config(self.config)
+        original = self.module.server_backups._archive
+        def archive(*args, **kwargs):
+            self.assertEqual(process.poll(), 0)
+            self.assertTrue(self.module.server_backups.lock.locked())
+            return original(*args, **kwargs)
+        with patch.object(self.module, 'start_minecraft_server', return_value=True) as start, \
+             patch.object(self.module.server_backups, '_archive', side_effect=archive):
+            result = self.client.post('/api/backup/create', json={'backup_shutdown': False}, headers=self.headers())
+        self.assertEqual(result.status_code, 200, result.json)
+        process.stdin.write.assert_called_once_with('stop\n')
+        process.kill.assert_not_called()
+        start.assert_called_once_with()
+        self.assertTrue((self.data / 'backups' / result.json['server_key'] / result.json['file']).is_file())
+        self.assertFalse(self.module.server_backups.lock.locked())
+
+    def test_backup_restart_error_reports_completed_archive(self):
+        from server_backups import BackupCompletedError
+        failure = BackupCompletedError(str(self.data / 'backups' / 'Test_Server' / 'kept.zip'),
+                                       RuntimeError('Restart failed. Start Minecraft manually.'))
+        with patch.object(self.module, 'create_backup', side_effect=failure), patch.object(self.app.logger, 'exception'):
+            result = self.client.post('/api/backup/create', headers=self.headers())
+        self.assertEqual(result.status_code, 500)
+        self.assertTrue(result.json['backup_created'])
+        self.assertEqual(result.json['file'], 'kept.zip')
+        self.assertEqual(result.json['server_key'], 'Test_Server')
+        self.assertIn('Backup created', result.json['message'])
+
+    def test_shutdown_backup_waits_for_real_child_final_write_and_log_drain(self):
+        import threading
+        (self.root / 'world-final.dat').write_bytes(b'before shutdown')
+        child_code = (
+            "import sys\nfrom pathlib import Path\n"
+            "for line in sys.stdin:\n"
+            " if line.strip() == 'stop':\n"
+            "  Path('world-final.dat').write_bytes(b'final saved chunks')\n"
+            "  print('Saved final chunks', flush=True)\n"
+            "  break\n"
+        )
+        process = subprocess.Popen([sys.executable, '-u', '-c', child_code], cwd=self.root,
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
+        def drain():
+            try:
+                output = process.stdout.read()
+                (self.root / 'final-console.log').write_text(output, encoding='utf-8')
+            finally:
+                process.stdout.close()
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+        self.module.MINECRAFT_PROCESS = process
+        self.module.MINECRAFT_LOG_THREAD = reader
+        self.config.update(backup_shutdown=True, server_pid=process.pid, is_running=True, target_state='Online')
+        self.module.save_config(self.config)
+        def recovered():
+            self.assertEqual(process.poll(), 0)
+            self.assertFalse(reader.is_alive())
+            self.assertTrue(self.module.server_backups.lock.locked())
+            return True
+        try:
+            with patch.object(self.module, 'start_minecraft_server', side_effect=recovered) as start:
+                result = self.client.post('/api/backup/create', headers=self.headers())
+            self.assertEqual(result.status_code, 200, result.json)
+            with zipfile.ZipFile(self.data / 'backups' / result.json['server_key'] / result.json['file']) as archive:
+                self.assertEqual(archive.read('world-final.dat'), b'final saved chunks')
+                self.assertIn(b'Saved final chunks', archive.read('final-console.log'))
+            start.assert_called_once_with()
+        finally:
+            # Only our temporary Python test child, never Minecraft or a saved PID.
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+            process.stdin.close()
+            reader.join(timeout=5)
+
+    def test_backup_lock_blocks_lifecycle_console_and_settings_writes(self):
+        with patch.object(self.module, 'start_minecraft_server') as start, \
+             patch.object(self.module, 'stop_minecraft_server') as stop, self.module.server_backups.exclusive():
+            for path in ('/start', '/stop', '/api/server/start', '/api/server/stop', '/api/server/restart',
+                         '/api/command', '/settings'):
+                response = self.client.post(path, json={'command': 'restart'}, headers=self.headers())
+                self.assertEqual(response.status_code, 409, (path, response.json))
+            self.assertEqual(self.client.get('/settings').status_code, 200)
+            start.assert_not_called()
+            stop.assert_not_called()
+            with self.app.test_request_context('/socket.io'):
+                with patch.object(self.security, 'current_user', return_value=self.owner):
+                    self.assertIn('already running', self.module.handle_command({'command': 'restart'})['error'])
+
+    def test_restore_requires_confirmed_offline_process_and_log_reader(self):
+        created = self.client.post('/api/backup/create', headers=self.headers()).json
+        marker = self.root / 'keep-until-offline.txt'
+        marker.write_text('Do not delete while Minecraft is running')
+        process = Mock(pid=43210)
+        process.poll.return_value = None
+        self.module.MINECRAFT_PROCESS = process
+        payload = {'server_name': created['server_key'], 'filename': created['file']}
+        result = self.client.post('/api/backup/restore', json=payload, headers=self.headers())
+        self.assertEqual(result.status_code, 409)
+        process.stdin.write.assert_not_called()
+        process.kill.assert_not_called()
+        self.assertTrue(marker.exists())
+        self.module.MINECRAFT_PROCESS = None
+        reader = self.module.MINECRAFT_LOG_THREAD = Mock()
+        reader.is_alive.return_value = True
+        result = self.client.post('/api/backup/restore', json=payload, headers=self.headers())
+        self.assertEqual(result.status_code, 409)
+        self.assertTrue(marker.exists())
+
+    def test_shutdown_backup_scheduler_failure_cooldown_and_completed_archive(self):
+        from server_backups import BackupBusy, BackupCompletedError
+        class EndLoop(Exception):
+            pass
+        def tick(error=None):
+            with patch.object(self.module, 'create_backup', side_effect=error, return_value='backup.zip') as create, \
+                 patch.object(self.app.logger, 'exception'), patch('time.time', return_value=10000), \
+                 patch('time.sleep', side_effect=EndLoop):
+                with self.assertRaises(EndLoop):
+                    self.module.backup_scheduler()
+            return create
+        self.config.update(auto_backup_enabled=True, auto_backup_freq='hourly', backup_shutdown=True,
+                           last_auto_backup=0, last_auto_backup_attempt=0)
+        self.module.save_config(self.config)
+        tick(BackupBusy('busy')).assert_called_once()
+        self.assertEqual(self.module.load_config()['last_auto_backup_attempt'], 0)
+        tick(OSError('disk full')).assert_called_once()
+        self.assertEqual(self.module.load_config()['last_auto_backup'], 0)
+        self.assertEqual(self.module.load_config()['last_auto_backup_attempt'], 10000)
+        tick().assert_not_called()
+        self.module.save_config(self.config)
+        tick(BackupCompletedError('backup.zip', RuntimeError('restart failed'))).assert_called_once()
+        self.assertEqual(self.module.load_config()['last_auto_backup'], 10000)
+
+    def test_status_poll_does_not_clear_backup_owned_or_detached_process_state(self):
+        self.config.update(server_pid=43210, is_running=True, target_state='Shutting Down')
+        self.module.save_config(self.config)
+        with patch.object(self.module.psutil, 'pid_exists', return_value=False), self.module.server_backups.exclusive():
+            self.client.get('/api/stats')
+        self.assertEqual(self.module.load_config()['server_pid'], 43210)
+        with patch.object(self.module.psutil, 'pid_exists', return_value=True):
+            self.assertEqual(self.client.get('/api/stats').json['status'], 'Online')
+        self.assertEqual(self.module.load_config()['server_pid'], 43210)
+
     def test_partial_archives_are_not_listed_or_downloadable(self):
         directory = self.data / 'backups' / 'Partial_Test'
         directory.mkdir(parents=True, exist_ok=True)
@@ -1614,6 +2205,227 @@ class AccountIntegrationTests(unittest.TestCase):
             self.assertEqual(result.status_code, 400)
             self.assertTrue(marker.exists())
             self.assertEqual(self.store.scope(), scope)
+
+    def test_console_commands_add_optional_slash_once_on_http_and_socket(self):
+        self.config.update(server_type='Purpur', mc_version='26.3')
+        self.module.save_config(self.config)
+        process = Mock()
+        process.poll.return_value = None
+        self.module.MINECRAFT_PROCESS = process
+        socket_client = self.module.socketio.test_client(self.app, flask_test_client=self.client)
+        self.addCleanup(lambda: socket_client.disconnect() if socket_client.is_connected() else None)
+        commands = (
+            ('help', '/help'), ('/help', '/help'),
+            ('plugins', '/plugins'), ('/plugins', '/plugins'),
+            ('  help  ', '/help'), ('  /plugins  ', '/plugins'),
+            ('//plugin-command', '//plugin-command'), ('//', '//'), ('///', '///'),
+            ('minecraft:help', '/minecraft:help'),
+            ('say Visit https://example.com/a/b?x=1  now', '/say Visit https://example.com/a/b?x=1  now'),
+            ('/say /help and //other', '/say /help and //other'),
+        )
+        for command, expected in commands:
+            with self.subTest(command=command, transport='http'):
+                process.stdin.reset_mock()
+                result = self.client.post('/api/command', json={'command': command}, headers=self.headers())
+                self.assertEqual(result.status_code, 200, result.json)
+                self.assertEqual(result.json['status'], 'success')
+                process.stdin.write.assert_called_once_with(expected + '\n')
+                process.stdin.flush.assert_called_once_with()
+            with self.subTest(command=command, transport='socket'):
+                process.stdin.reset_mock()
+                result = socket_client.emit('send_command', {'command': command}, callback=True)
+                self.assertEqual(result['status'], 'success')
+                process.stdin.write.assert_called_once_with(expected + '\n')
+                process.stdin.flush.assert_called_once_with()
+
+    def test_console_stop_prevents_backup_from_restarting_intentional_shutdown(self):
+        process = Mock(pid=43210)
+        process.poll.return_value = None
+        self.module.MINECRAFT_PROCESS = process
+        self.config.update(server_pid=process.pid, is_running=True, target_state='Online')
+        self.module.save_config(self.config)
+        result = self.client.post('/api/command', json={'command': '/stop'}, headers=self.headers())
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(self.module.load_config()['target_state'], 'Shutting Down')
+        with patch.object(self.module, 'start_minecraft_server') as start:
+            with self.assertRaisesRegex(RuntimeError, 'already shutting down'):
+                with self.module.backup_lifecycle.offline():
+                    self.fail('Backup should not claim an intentional shutdown')
+            start.assert_not_called()
+
+    def test_console_commands_preserve_legacy_and_other_engine_stdin_syntax(self):
+        process = Mock()
+        process.poll.return_value = None
+        self.module.MINECRAFT_PROCESS = process
+        socket_client = self.module.socketio.test_client(self.app, flask_test_client=self.client)
+        self.addCleanup(lambda: socket_client.disconnect() if socket_client.is_connected() else None)
+        cases = [('Paper', '1.21.4', 'help'), ('Purpur', '1.21.5', 'help'),
+                 ('Vanilla', '26.3', 'help'), ('Forge', '1.21.1', 'help'),
+                 ('Fabric', '26.3', 'help'), ('Paper', '1.21.8', '/help'),
+                 ('Paper', '26.3', '/help')]
+        for engine, version, expected in cases:
+            self.config.update(server_type=engine, mc_version=version)
+            self.module.save_config(self.config)
+            with self.subTest(engine=engine, version=version, transport='http'):
+                process.stdin.reset_mock()
+                response = self.client.post('/api/command', json={'command': 'help'}, headers=self.headers())
+                self.assertEqual(response.status_code, 200, response.json)
+                process.stdin.write.assert_called_once_with(expected + '\n')
+            with self.subTest(engine=engine, version=version, transport='socket'):
+                process.stdin.reset_mock()
+                result = socket_client.emit('send_command', {'command': 'help'}, callback=True)
+                self.assertEqual(result['status'], 'success')
+                process.stdin.write.assert_called_once_with(expected + '\n')
+            # User-supplied slash-sensitive plugin syntax is never rewritten.
+            process.stdin.reset_mock()
+            response = self.client.post('/api/command', json={'command': '//plugin-command'}, headers=self.headers())
+            self.assertEqual(response.status_code, 200, response.json)
+            process.stdin.write.assert_called_once_with('//plugin-command\n')
+
+    def test_console_commands_reject_invalid_and_multiline_input_without_writing(self):
+        process = Mock()
+        process.poll.return_value = None
+        self.module.MINECRAFT_PROCESS = process
+        socket_client = self.module.socketio.test_client(self.app, flask_test_client=self.client)
+        self.addCleanup(lambda: socket_client.disconnect() if socket_client.is_connected() else None)
+        payloads = [None, [], ['help'], 'help', 42, True, {},
+                    {'command': None}, {'command': []}, {'command': 42},
+                    {'command': ''}, {'command': '   '}, {'command': '/'}, {'command': ' / '},
+                    {'command': 'help\nstop'}, {'command': 'help\rstop'}, {'command': 'help\x00'},
+                    {'command': '\nhelp'}, {'command': 'help\r'}]
+        for payload in payloads:
+            with self.subTest(payload=payload, transport='http'):
+                response = self.client.post('/api/command', data=json.dumps(payload),
+                    content_type='application/json', headers=self.headers())
+                self.assertEqual(response.status_code, 400, response.get_data(as_text=True))
+                self.assertEqual(response.json['status'], 'error')
+                self.assertTrue(response.json.get('message') or response.json.get('error'))
+            with self.subTest(payload=payload, transport='socket'):
+                result = socket_client.emit('send_command', payload, callback=True)
+                self.assertIn('error', result)
+        self.assertIn('error', socket_client.emit('send_command', callback=True))
+        process.stdin.write.assert_not_called()
+        process.stdin.flush.assert_not_called()
+
+    def test_console_commands_offline_locked_and_unauthorized_never_write(self):
+        process = Mock()
+        process.poll.return_value = 0
+        self.module.MINECRAFT_PROCESS = process
+        socket_client = self.module.socketio.test_client(self.app, flask_test_client=self.client)
+        self.addCleanup(lambda: socket_client.disconnect() if socket_client.is_connected() else None)
+        response = self.client.post('/api/command', json={'command': 'help'}, headers=self.headers())
+        self.assertEqual(response.json['status'], 'error')
+        self.assertIn('error', socket_client.emit('send_command', {'command': 'help'}, callback=True))
+        process.poll.return_value = None
+        with self.module.server_backups.exclusive():
+            response = self.client.post('/api/command', json={'command': 'help'}, headers=self.headers())
+            self.assertEqual(response.status_code, 409)
+            self.assertIn('error', socket_client.emit('send_command', {'command': 'help'}, callback=True))
+        reader = self.client_for(self.create('command-reader', ['console.view']))
+        reader_socket = self.module.socketio.test_client(self.app, flask_test_client=reader)
+        self.addCleanup(lambda: reader_socket.disconnect() if reader_socket.is_connected() else None)
+        self.assertEqual(reader.post('/api/command', json={'command': 'help'}, headers=self.headers(reader)).status_code, 403)
+        self.assertIn('error', reader_socket.emit('send_command', {'command': 'help'}, callback=True))
+        self.assertEqual(self.client.post('/api/command', json={'command': 'help'}).status_code, 403)
+        process.stdin.write.assert_not_called()
+        process.stdin.flush.assert_not_called()
+
+    def test_console_commands_closed_stdin_reports_failure_without_retrying(self):
+        self.config.update(server_type='Purpur', mc_version='26.3')
+        self.module.save_config(self.config)
+        process = Mock()
+        process.poll.return_value = None
+        self.module.MINECRAFT_PROCESS = process
+        socket_client = self.module.socketio.test_client(self.app, flask_test_client=self.client)
+        self.addCleanup(lambda: socket_client.disconnect() if socket_client.is_connected() else None)
+        for operation in ('write', 'flush'):
+            for error_type in (BrokenPipeError, ValueError):
+                for transport in ('http', 'socket'):
+                    with self.subTest(operation=operation, error_type=error_type, transport=transport):
+                        process.stdin.reset_mock(side_effect=True)
+                        getattr(process.stdin, operation).side_effect = error_type('closed stream')
+                        if transport == 'http':
+                            result = self.client.post('/api/command', json={'command': 'help'}, headers=self.headers())
+                            self.assertEqual(result.status_code, 409, result.json)
+                            self.assertEqual(result.json['status'], 'error')
+                        else:
+                            result = socket_client.emit('send_command', {'command': 'help'}, callback=True)
+                            self.assertIn('error', result)
+                        process.stdin.write.assert_called_once_with('/help\n')
+                        if operation == 'write':
+                            process.stdin.flush.assert_not_called()
+                        else:
+                            process.stdin.flush.assert_called_once_with()
+
+    def test_automation_console_shutdown_aliases_cancel_before_delivery(self):
+        self.config.update(server_type='Purpur', mc_version='26.3')
+        self.module.save_config(self.config)
+        process = Mock()
+        process.poll.return_value = None
+        self.module.MINECRAFT_PROCESS = process
+        socket_client = self.module.socketio.test_client(self.app, flask_test_client=self.client)
+        self.addCleanup(lambda: socket_client.disconnect() if socket_client.is_connected() else None)
+        aliases = ('stop', 'minecraft:stop', 'bukkit:stop', 'restart', 'bukkit:restart', 'spigot:restart')
+        for alias in aliases:
+            for prefix in ('', '/'):
+                for transport in ('http', 'socket'):
+                    command = prefix + alias
+                    with self.subTest(command=command, transport=transport):
+                        events = []
+                        process.stdin.write.side_effect = lambda value: events.append(('write', value))
+                        process.stdin.flush.side_effect = lambda: events.append(('flush', None))
+                        with patch.object(self.module.server_automation, 'stop',
+                                          side_effect=lambda: events.append(('cancel', None))):
+                            if transport == 'http':
+                                response = self.client.post('/api/command', json={'command': command}, headers=self.headers())
+                                self.assertEqual(response.status_code, 200, response.json)
+                            else:
+                                response = socket_client.emit('send_command', {'command': command}, callback=True)
+                                self.assertEqual(response['status'], 'success')
+                        self.assertEqual(events, [('cancel', None), ('write', '/' + alias + '\n'), ('flush', None)])
+
+    def test_automation_console_non_shutdown_commands_preserve_policy(self):
+        process = Mock()
+        process.poll.return_value = None
+        self.module.MINECRAFT_PROCESS = process
+        socket_client = self.module.socketio.test_client(self.app, flask_test_client=self.client)
+        self.addCleanup(lambda: socket_client.disconnect() if socket_client.is_connected() else None)
+        with patch.object(self.module.server_automation, 'stop') as cancel:
+            for command in ('say stop', '/say stop', 'say /restart', '//stop', '//restart', 'stopping', 'plugins'):
+                with self.subTest(command=command):
+                    response = self.client.post('/api/command', json={'command': command}, headers=self.headers())
+                    self.assertEqual(response.status_code, 200, response.json)
+                    result = socket_client.emit('send_command', {'command': command}, callback=True)
+                    self.assertEqual(result['status'], 'success')
+            cancel.assert_not_called()
+
+    def test_automation_rejected_console_commands_never_cancel_policy(self):
+        process = Mock()
+        process.poll.return_value = None
+        self.module.MINECRAFT_PROCESS = process
+        owner_socket = self.module.socketio.test_client(self.app, flask_test_client=self.client)
+        self.addCleanup(lambda: owner_socket.disconnect() if owner_socket.is_connected() else None)
+        viewer = self.client_for(self.create('automation-console-reader', ['console.view']))
+        viewer_socket = self.module.socketio.test_client(self.app, flask_test_client=viewer)
+        self.addCleanup(lambda: viewer_socket.disconnect() if viewer_socket.is_connected() else None)
+        with patch.object(self.module.server_automation, 'stop') as cancel:
+            response = viewer.post('/api/command', json={'command': 'stop'}, headers=self.headers(viewer))
+            self.assertEqual(response.status_code, 403)
+            self.assertIn('error', viewer_socket.emit('send_command', {'command': 'stop'}, callback=True))
+            self.assertEqual(self.client.post('/api/command', json={'command': 'stop'}).status_code, 403)
+            response = self.client.post('/api/command', json={'command': 'stop\nhelp'}, headers=self.headers())
+            self.assertEqual(response.status_code, 400)
+            self.assertIn('error', owner_socket.emit('send_command', {'command': 'stop\nhelp'}, callback=True))
+            with self.module.server_backups.exclusive():
+                response = self.client.post('/api/command', json={'command': 'stop'}, headers=self.headers())
+                self.assertEqual(response.status_code, 409)
+                self.assertIn('error', owner_socket.emit('send_command', {'command': 'stop'}, callback=True))
+            process.poll.return_value = 1
+            response = self.client.post('/api/command', json={'command': 'help'}, headers=self.headers())
+            self.assertEqual(response.json['status'], 'error')
+            self.assertIn('error', owner_socket.emit('send_command', {'command': 'help'}, callback=True))
+            cancel.assert_not_called()
+        process.stdin.write.assert_not_called()
 
     def test_socket_auth_permissions_and_revocation(self):
         anonymous = self.module.socketio.test_client(self.app, flask_test_client=self.app.test_client())

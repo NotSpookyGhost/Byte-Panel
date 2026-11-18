@@ -11,6 +11,7 @@
       "childrenIds": [
         "block-1709571212684",
         "block-1709571228545",
+        "block-1795020045057",
         "block-1794859760368",
         "block-1709571234315",
         "block-1794858108471",
@@ -40,7 +41,7 @@
         "width": null,
         "url": "https://imgur.com/z8evHHi.jpg",
         "alt": "Byte Panel",
-        "linkHref": "{{login_url}}",
+        "linkHref": "https://mc.bytedev.app",
         "contentAlignment": "middle"
       }
     }
@@ -119,7 +120,7 @@
         "fullWidth": false,
         "size": "medium",
         "text": "Server Panel",
-        "url": "{{login_url}}"
+        "url": "https://mc.bytedev.app"
       }
     }
   },
@@ -258,7 +259,7 @@
     "type": "Heading",
     "data": {
       "props": {
-        "text": "Welcome to {{servername}}!"
+        "text": "Welcome to {{servername}}"
       },
       "style": {
         "color": "#FAFAFA",
@@ -288,6 +289,26 @@
       },
       "props": {
         "text": "Developed by Bytedev.app"
+      }
+    }
+  },
+  "block-1795020045057": {
+    "type": "Image",
+    "data": {
+      "style": {
+        "padding": {
+          "top": 16,
+          "bottom": 16,
+          "right": 24,
+          "left": 24
+        },
+        "textAlign": "center"
+      },
+      "props": {
+        "url": "{{server_icon}}",
+        "alt": "Sample product",
+        "linkHref": null,
+        "contentAlignment": "middle"
       }
     }
   }
