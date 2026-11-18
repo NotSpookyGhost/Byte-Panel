@@ -95,6 +95,188 @@ class AccountIntegrationTests(unittest.TestCase):
                   'username': 'smtp-user', 'password': 'smtp-private-secret', 'panel_url': 'https://panel.example.com', **overrides}
         return self.security.mailer.save(values)
 
+    def test_obsidian_shell_is_shared_and_login_stands_alone(self):
+        for path in ('/overview', '/console', '/logs', '/players', '/plugins', '/properties',
+                     '/backups', '/settings', '/users', '/account'):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                page = response.get_data(as_text=True)
+                self.assertEqual(page.count('id="panel-sidebar"'), 1)
+                self.assertEqual(page.count('class="panel-header"'), 1)
+                self.assertIn('data-accent="lime"', page)
+                nav = page.split('<nav class="nav-group"')[1].split('</nav>')[0]
+                self.assertNotIn('href="/account"', nav)
+                self.assertIn('class="profile-control', page)
+        login = self.app.test_client().get('/login').get_data(as_text=True)
+        self.assertIn('page-login', login)
+        self.assertNotIn('id="panel-sidebar"', login)
+        self.assertNotIn('class="panel-header"', login)
+
+    def test_sidebar_brand_uses_uploaded_logo_or_closed_default_mark(self):
+        logo = self.data / 'branding' / 'logo.png'
+        self.assertFalse(logo.exists(), 'Test fixture must start without a custom logo')
+        page = self.client.get('/overview').get_data(as_text=True)
+        brand = page.split('<div class="sidebar-brand">')[1].split('<div class="sidebar-server">')[0]
+        self.assertIn('class="brand-mark"', brand)
+        self.assertIn('d="M16 3 29 16 16 29 3 16Z"', brand)
+        self.assertIn('href="/overview"', brand)
+        logo.write_bytes((APP_DIR / 'static' / 'bytedev_logo.png').read_bytes())
+        self.addCleanup(logo.unlink)
+        for path in ('/overview', '/backups', '/settings', '/account'):
+            with self.subTest(path=path):
+                page = self.client.get(path).get_data(as_text=True)
+                brand = page.split('<div class="sidebar-brand">')[1].split('<div class="sidebar-server">')[0]
+                self.assertIn('class="brand-logo" src="/branding-assets/logo.png"', brand)
+                self.assertNotIn('class="brand-mark"', brand)
+                self.assertIn('Byte Panel', brand)
+
+    def test_server_icon_control_is_in_general_not_appearance(self):
+        page = self.client.get('/settings').get_data(as_text=True)
+        general = page.split('id="settings-general"')[1].split('</section>')[0]
+        appearance = page.split('id="settings-appearance"')[1].split('</section>')[0]
+        self.assertIn('for="serverIconInput"', general)
+        self.assertIn('name="server_icon"', general)
+        self.assertIn('Server icon', general)
+        self.assertNotIn('name="server_icon"', appearance)
+        self.assertNotIn('name="custom_logo"', page)
+        self.assertIn('name="custom_favicon"', appearance)
+        self.assertIn('name="custom_bg"', appearance)
+
+    def upload_test_icon(self, raw, field='server_icon', client=None, **form):
+        client = client or self.client
+        return client.post('/settings', data={field: (io.BytesIO(raw), '../../chosen.jpg'), **form},
+                           headers=self.headers(client))
+
+    def test_server_icon_upload_is_shared_and_follows_backup_restore(self):
+        from PIL import Image
+        from test_server_icon import image_bytes
+        result = self.upload_test_icon(image_bytes())
+        self.assertEqual(result.status_code, 200)
+        self.assertIn('Restart Minecraft', result.get_data(as_text=True))
+        icon = self.root / 'server-icon.png'
+        original = icon.read_bytes()
+        with Image.open(icon) as image:
+            self.assertEqual(image.size, (64, 64))
+            self.assertEqual(image.format, 'PNG')
+        self.assertTrue(self.module.get_custom_assets_state()['server_icon'])
+        self.assertFalse((self.data / 'branding' / 'logo.png').exists())
+        response = self.client.get('/branding-assets/logo.png')
+        try:
+            self.assertEqual(response.data, original)
+            self.assertIn('no-store', response.headers['Cache-Control'])
+        finally:
+            response.close()
+        for path in ('/overview', '/login', '/settings'):
+            self.assertIn('/branding-assets/logo.png', self.client.get(path).get_data(as_text=True))
+        backup = self.client.post('/api/backup/create', headers=self.headers()).json
+        with zipfile.ZipFile(self.data / 'backups' / backup['server_key'] / backup['file']) as archive:
+            self.assertEqual(archive.read('server-icon.png'), original)
+            self.assertFalse(any(name.endswith('.tmp') for name in archive.namelist()))
+        self.assertEqual(self.upload_test_icon(image_bytes(color='red')).status_code, 200)
+        self.assertNotEqual(icon.read_bytes(), original)
+        restored = self.client.post('/api/backup/restore', json={
+            'server_name': backup['server_key'], 'filename': backup['file']}, headers=self.headers())
+        self.assertEqual(restored.status_code, 200, restored.json)
+        self.assertEqual(icon.read_bytes(), original)
+        response = self.client.get('/branding-assets/logo.png')
+        try:
+            self.assertEqual(response.data, original)
+        finally:
+            response.close()
+
+    def test_invalid_server_icon_and_busy_backup_leave_files_and_settings_unchanged(self):
+        from test_server_icon import image_bytes
+        self.assertEqual(self.upload_test_icon(image_bytes()).status_code, 200)
+        icon = self.root / 'server-icon.png'
+        original = icon.read_bytes()
+        config = self.module.load_config()
+        result = self.upload_test_icon(b'<svg>not a raster image</svg>', server_name='Must not save')
+        self.assertEqual(result.status_code, 400)
+        self.assertIn('Server icon is invalid', result.get_data(as_text=True))
+        self.assertEqual(icon.read_bytes(), original)
+        self.assertEqual(self.module.load_config(), config)
+        with self.module.server_backups.exclusive():
+            result = self.upload_test_icon(image_bytes(color='red'), server_name='Must not save')
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(icon.read_bytes(), original)
+        self.assertEqual(self.module.load_config(), config)
+
+    def test_server_icon_storage_failure_keeps_previous_image(self):
+        from test_server_icon import image_bytes
+        self.assertEqual(self.upload_test_icon(image_bytes()).status_code, 200)
+        original = (self.root / 'server-icon.png').read_bytes()
+        with patch('server_icon.os.replace', side_effect=OSError('storage unavailable')), \
+             self.assertLogs(self.app.logger, level='ERROR'):
+            result = self.upload_test_icon(image_bytes(color='red'))
+        self.assertEqual(result.status_code, 500)
+        self.assertIn('Check disk space', result.get_data(as_text=True))
+        self.assertEqual((self.root / 'server-icon.png').read_bytes(), original)
+        self.assertEqual(list(self.root.glob('.server-icon-*.tmp')), [])
+
+    def test_server_icon_requires_settings_permission_and_csrf_even_for_legacy_upload(self):
+        from test_server_icon import image_bytes
+        viewer = self.client_for(self.create())
+        for field in ('server_icon', 'custom_logo'):
+            self.assertEqual(self.upload_test_icon(image_bytes(), field=field, client=viewer).status_code, 403)
+            no_csrf = self.client.post('/settings', data={field: (io.BytesIO(image_bytes()), 'icon.png')})
+            self.assertEqual(no_csrf.status_code, 403)
+            self.assertFalse((self.root / 'server-icon.png').exists())
+        self.assertEqual(self.upload_test_icon(image_bytes(), field='custom_logo').status_code, 200)
+        self.assertTrue((self.root / 'server-icon.png').is_file())
+
+    def test_obsidian_settings_persist_accent_and_server_name_not_product_brand(self):
+        self.config.update(auto_backup_freq='6_hours', java_path='/configured/java')
+        self.module.save_config(self.config)
+        for accent in ('lime', 'yellow', 'blue'):
+            response = self.client.post('/settings', data={
+                'accent': accent, 'server_name': 'Community <Realm>', 'panel_name': 'Not Byte Panel',
+                '_csrf': self.headers()['X-Panel-CSRF']})
+            self.assertEqual(response.status_code, 200)
+            config = self.module.load_config()
+            self.assertEqual(config['accent'], accent)
+            self.assertEqual(config['server_name'], 'Community <Realm>')
+            self.assertEqual(config['panel_name'], 'Byte Panel')
+            self.assertEqual(config['auto_backup_freq'], '6_hours')
+            self.assertEqual(config['java_path'], '/configured/java')
+            page = self.client.get('/overview').get_data(as_text=True)
+            self.assertIn('Community &lt;Realm&gt;', page)
+            self.assertIn('data-accent="' + accent + '"', page)
+        page = self.client.get('/settings').get_data(as_text=True)
+        self.assertNotIn('name="panel_name"', page)
+        for section in ('general', 'runtime', 'backups', 'appearance', 'email', 'operations'):
+            self.assertIn('id="settings-' + section + '"', page)
+
+    def test_obsidian_invalid_settings_do_not_write_and_permissions_hold(self):
+        original = self.module.load_config()
+        for values in ({'accent': 'red'}, {'server_name': ''}, {'server_name': 'x' * 81},
+                       {'server_name': 'bad\nname'}):
+            response = self.client.post('/settings', data=values, headers=self.headers())
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(self.module.load_config(), original)
+        viewer = self.client_for(self.create())
+        self.assertEqual(viewer.post('/settings', data={'accent': 'blue'}, headers=self.headers(viewer)).status_code, 403)
+        self.config['accent'] = 'legacy-invalid'
+        self.module.save_config(self.config)
+        self.assertEqual(self.module.load_config()['accent'], 'lime')
+
+    def test_overview_activity_is_real_escaped_and_permission_filtered(self):
+        empty = self.client.get('/overview').get_data(as_text=True)
+        self.assertIn('No recent activity to show', empty)
+        with closing(sqlite3.connect(self.module.PLAYER_DB_FILE)) as conn:
+            conn.execute("INSERT INTO users (uuid, username) VALUES (?, ?)", ('activity-id', '<Activity Player>'))
+            conn.execute("INSERT INTO login_events (uuid, timestamp, ip) VALUES (?, ?, ?)",
+                         ('activity-id', '2026-11-17 12:00:00', '192.0.2.100'))
+            conn.commit()
+        page = self.client.get('/overview').get_data(as_text=True)
+        self.assertIn('&lt;Activity Player&gt;', page)
+        self.assertNotIn('192.0.2.100', page)
+        self.assertIn('Not measured by this panel', page)
+        viewer = self.client_for(self.create())
+        restricted = viewer.get('/overview').get_data(as_text=True)
+        self.assertNotIn('Activity Player', restricted)
+        self.assertIn('Player-history permission is required', restricted)
+
     def test_all_routes_have_explicit_access_policy(self):
         known = set(ROUTE_PERMISSIONS) | SETUP_ROUTES | {'static', 'serve_custom_branding', 'login'}
         self.assertEqual({rule.endpoint for rule in self.app.url_map.iter_rules()} - known, set())
@@ -382,11 +564,11 @@ class AccountIntegrationTests(unittest.TestCase):
 
     def test_csrf_required_for_form_and_json_mutations(self):
         self.assertEqual(self.client.post('/api/users', json={}).status_code, 403)
-        self.assertEqual(self.client.post('/settings', data={'panel_name': 'bad'}).status_code, 403)
-        self.assertNotEqual(self.module.load_config()['panel_name'], 'bad')
-        result = self.client.post('/settings', data={'panel_name': 'Good', '_csrf': self.headers()['X-Panel-CSRF']})
+        self.assertEqual(self.client.post('/settings', data={'server_name': 'bad'}).status_code, 403)
+        self.assertNotEqual(self.module.load_config()['server_name'], 'bad')
+        result = self.client.post('/settings', data={'server_name': 'Good', '_csrf': self.headers()['X-Panel-CSRF']})
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(self.module.load_config()['panel_name'], 'Good')
+        self.assertEqual(self.module.load_config()['server_name'], 'Good')
 
     def test_create_duplicate_and_password_hashing(self):
         self.smtp()
@@ -723,9 +905,10 @@ class AccountIntegrationTests(unittest.TestCase):
         result = self.client.put('/api/settings/smtp', json=data, headers=self.headers())
         self.assertFalse(result.json['smtp']['password_set'])
 
-    def test_invitation_and_resend_use_the_latest_saved_panel_name(self):
+    def test_invitation_and_resend_use_the_latest_saved_server_name(self):
         self.smtp()
-        self.config['panel_name'] = 'Byte Community'
+        self.config['server_name'] = 'Byte Community'
+        self.config['panel_name'] = 'Legacy Panel Branding'
         self.module.save_config(self.config)
         body = dict(username='named-panel', email='new@example.com', role='custom', permissions=[])
         with patch('panel_mail.smtplib.SMTP') as factory:
@@ -738,8 +921,8 @@ class AccountIntegrationTests(unittest.TestCase):
             self.assertIn('Byte Community', first['Subject'])
             for kind in ('plain', 'html'):
                 self.assertIn('Welcome to Byte Community!', first.get_body(preferencelist=(kind,)).get_content())
-                self.assertNotIn(self.config['server_name'], first.get_body(preferencelist=(kind,)).get_content())
-            self.config['panel_name'] = 'Renamed Community'
+                self.assertNotIn('Legacy Panel Branding', first.get_body(preferencelist=(kind,)).get_content())
+            self.config['server_name'] = 'Renamed Community'
             self.module.save_config(self.config)
             result = self.client.post('/api/users/' + str(response.json['user']['id']) + '/invite',
                                       json={}, headers=self.headers())
@@ -1241,6 +1424,7 @@ class AccountIntegrationTests(unittest.TestCase):
         response = self.client.get('/api/backup/status/' + result.json['job_id'])
         self.assertEqual(response.json['status'], 'success', response.json)
         self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        self.assertEqual(response.json['server_key'], 'Test_Server')
         archive_path = self.data / 'backups' / 'Test_Server' / response.json['file']
         with zipfile.ZipFile(archive_path) as archive:
             self.assertEqual(archive.read('old.dat'), b'old imported file')
@@ -1250,6 +1434,29 @@ class AccountIntegrationTests(unittest.TestCase):
         # Job status must not leak into a reset/replaced server's account scope.
         with patch.object(self.store, 'scope', return_value='new-scope'):
             self.assertEqual(self.module.server_backups.status(result.json['job_id'], self.store.scope()), None)
+
+    def test_current_backup_key_matches_creation_listing_and_download(self):
+        self.config['server_name'] = 'JRock Bottom'
+        self.module.save_config(self.config)
+        marker = self.root / 'grouping-check.txt'
+        marker.write_bytes(b'isolated backup grouping test')
+        result = self.client.post('/api/backup/create', headers=self.headers())
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json['server_key'], 'JRock_Bottom')
+        archive = self.data / 'backups' / result.json['server_key'] / result.json['file']
+        original = archive.read_bytes()
+        listing = self.client.get('/api/backups/list').json['backups']
+        self.assertIn(result.json['file'], [f['filename'] for f in listing['JRock_Bottom']])
+        markup = self.client.get('/backups').get_data(as_text=True)
+        self.assertIn('const currentServerName = "JRock Bottom";', markup)
+        self.assertIn('const currentServerKey = "JRock_Bottom";', markup)
+        response = self.client.get('/api/backup/download/' + result.json['server_key'] + '/' + result.json['file'])
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data, original)
+        finally:
+            response.close()
+        self.assertEqual(archive.read_bytes(), original)
 
     def test_backup_errors_return_json_and_log_the_actual_failure(self):
         import errno

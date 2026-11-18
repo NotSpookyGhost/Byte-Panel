@@ -8,6 +8,7 @@ RUN apk add --no-cache \
     py3-psutil \
     py3-flask \
     py3-requests \
+    py3-pillow \
     curl \
     wget \
     jq \

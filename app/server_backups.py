@@ -18,6 +18,11 @@ PORTABLE_KEYS = ('server_name', 'mc_version', 'server_type', 'ram_gb', 'java_pat
                  'forge_version', 'forge_full_version', 'launch_type', 'launch_target')
 
 
+def backup_server_key(server_name):
+    """Storage identifier shared by archive creation and the UI; never a display label."""
+    return secure_filename(str(server_name)) or 'server'
+
+
 class BackupBusy(RuntimeError):
     pass
 
@@ -93,7 +98,8 @@ class ServerBackups:
             path = self._archive(self.load_config().get('server_name', 'Server'), True,
                                  is_restore_backup=is_restore,
                                  progress=lambda **values: self._update(job_id, **values))
-            result = dict(status='success', file=os.path.basename(path), message='Backup created successfully!')
+            result = dict(status='success', file=os.path.basename(path), server_key=Path(path).parent.name,
+                          message='Backup created successfully!')
         except Exception as error:
             self.logger.exception('Server backup failed (job %s)', job_id)
             result = dict(status='error', message=backup_error(error))
@@ -104,7 +110,7 @@ class ServerBackups:
 
     def _archive(self, server_name, is_manual, is_initial=False, is_restore_backup=False, progress=None):
         progress = progress or (lambda **values: None)
-        server_name = secure_filename(str(server_name)) or 'server'
+        server_name = backup_server_key(server_name)
         root = self.server.resolve(strict=True)
         backup_root = self.data / 'backups'
         destination = backup_root / server_name

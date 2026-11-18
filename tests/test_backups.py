@@ -12,7 +12,7 @@ from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'app'))
-from server_backups import ServerBackups, BackupBusy, backup_error
+from server_backups import ServerBackups, BackupBusy, backup_error, backup_server_key
 
 
 class BackupTests(unittest.TestCase):
@@ -34,6 +34,15 @@ class BackupTests(unittest.TestCase):
 
     def archives(self):
         return sorted((self.data / 'backups').rglob('*.zip'))
+
+    def test_archive_creation_uses_shared_storage_key(self):
+        for name, key in [('JRock Bottom', 'JRock_Bottom'), ('Café Realm!', 'Cafe_Realm'),
+                          ('!!!', 'server'), ('Friends_SMP', 'Friends_SMP')]:
+            with self.subTest(name=name):
+                self.assertEqual(backup_server_key(name), key)
+                archive = Path(self.manager.create(name, True))
+                self.assertEqual(archive.parent.name, key)
+                self.assertTrue(archive.is_file())
 
     def test_old_and_future_dates_are_clamped_without_changing_source(self):
         old = self.server / 'old.dat'
@@ -183,6 +192,8 @@ class BackupTests(unittest.TestCase):
         result = self.manager.status(job['job_id'], 'scope')
         self.assertEqual(result['status'], 'success')
         self.assertEqual(result['file'], 'example.zip')
+        # Report the actual archive location, not the current display name.
+        self.assertEqual(result['server_key'], self.server.name)
         self.assertEqual(result['files_done'], 3)
         self.assertFalse(self.manager.lock.locked())
 

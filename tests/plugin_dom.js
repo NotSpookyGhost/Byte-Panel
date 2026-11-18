@@ -55,6 +55,13 @@ function createDocument() {
             return node;
         },
         createTextNode: text => { const node = new Element('#text', document); node.textContent = text; return node; },
+        querySelector: selector => {
+            for (const el of elements.values()) {
+                const match = el.querySelectorAll(selector)[0];
+                if (match) return match;
+            }
+            return null;
+        },
         getElementById: id => {
             if (!elements.has(id)) elements.set(id, new Element(id === 'plugin-content' ? 'textarea' : 'div', document));
             return elements.get(id);

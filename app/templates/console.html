@@ -10,47 +10,21 @@
     <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
     {% endif %}
     {% include 'panel_access.html' %}
+    {% include 'panel_ui.html' %}
 </head>
 
-<body class="theme-{{ config.theme }}">
-    <div class="sidebar">
-        <div class="nav-group">
-            <div class="sidebar-header">
-                {% if has_custom.logo %}
-                <img class="sidebar-logo" src="/branding-assets/logo.png" alt="Logo">
-                {% else %}
-                <img class="sidebar-logo" src="{{ url_for('static', filename='bytedev_logo.png') }}" alt="Default Logo">
-                {% endif %}
-                <h2>{{ config.panel_name }}</h2>
-            </div>
-            <a href="/overview">Overview</a>
-            {% if can is not defined or can('console.view') %}<a href="/console" class="active">Console</a>{% endif %}
-            {% if can is not defined or can('logs.view') %}<a href="/logs">Logs</a>{% endif %}
-            {% if can is not defined or can('players.view') %}<a href="/players">Players</a>{% endif %}
-            {% include 'plugins_nav.html' %}
-            {% if can is not defined or can('properties.manage') %}<a href="/properties">Properties</a>{% endif %}            {% if can is not defined or (can('backups.create') or can('backups.restore')) %}<a href="/backups">Backups</a>{% endif %}
-            {% if can is not defined or can('settings.manage') %}<a href="/settings">Settings</a>{% endif %}
-                {% include 'accounts_nav.html' %}
-        </div>
-        <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
-            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ current_user.username if current_user else config.admin_user }}</div>
-            <form action="/logout" method="GET" style="margin: 0;">
-                <button type="submit" class="btn"
-                    style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
-            </form>
-        </div>
-    </div>
+<body class="theme-{{ config.theme }} obsidian page-console " data-accent="{{ config.get('accent', 'lime') }}" data-restricted="{{ 'true' if current_user is defined and current_user and current_user.must_change_password else 'false' }}">
+    {% set page_title = 'Console' %}
+    {% include 'panel_sidebar.html' %}
+
     <div class="main-layout">
-        <div class="top-action-bar">
-            <div>Server Console | Status: <strong id="top-status" style="color: var(--text-muted);">Offline</strong>
-            </div>
-            <div style="display:flex; gap:10px;">
-                <button data-permission="server.control" class="btn btn-start" onclick="triggerAction('start')">Start</button>
-                <button data-permission="server.control" class="btn btn-stop" onclick="triggerAction('stop')">Stop</button>
-                <button data-permission="server.control" class="btn btn-restart" onclick="triggerAction('restart')">Restart</button>
-            </div>
-        </div>
-        <div class="console-container">
+        {% set page_actions %}
+<button data-permission="server.control" class="btn btn-start" onclick="triggerAction('start')">Start</button>
+<button data-permission="server.control" class="btn btn-stop" onclick="triggerAction('stop')">Stop</button>
+<button data-permission="server.control" class="btn btn-restart" onclick="triggerAction('restart')">Restart</button>
+{% endset %}
+{% include 'panel_header.html' %}
+        <div class="console-container" id="panel-content" tabindex="-1">
             <h3 style="color: var(--text-main); margin-top: 0;"></h3>
 
             <div id="serverConsole" class="terminal"
@@ -58,7 +32,7 @@
             </div>
             
             <div style="display: flex; gap: 10px; margin-top: 15px; max-width: 600px; margin-left: auto; margin-right: auto;">
-                <input data-permission="console.command" type="text" id="commandInput" placeholder="Enter a server command (e.g. say Hello World)"
+                <input data-permission="console.command" type="text" id="commandInput" aria-label="Server command" placeholder="Enter a server command (e.g. say Hello World)"
                     style="flex-grow: 1; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-main);"
                     onkeydown="if(event.key === 'Enter') sendCommand()">
                 <button data-permission="console.command" class="btn btn-start" onclick="sendCommand()">Send</button>
@@ -210,28 +184,8 @@
             // Run once immediately on load
             updateConsole();
 
-            function updateStats() {
-                fetch('/api/stats?t=' + Date.now()).then(res => res.json()).then(data => {
-                    const topStatus = document.getElementById('top-status');
-                    if (topStatus) {
-                        topStatus.innerText = data.status;
-                        if (data.status === 'Online') {
-                            topStatus.style.color = '#10b981';
-                        } else if (data.status === 'Starting' || data.status === 'Shutting Down') {
-                            topStatus.style.color = '#f59e0b';
-                        } else {
-                            topStatus.style.color = '#ef4444';
-                        }
-                    }
-                }).catch(err => console.error("Stats fetch error:", err));
-            }
 
-            setInterval(updateStats, 2000);
-            updateStats();
         </script>
-    <div style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
-        <div>Byte Panel {{ app_version }}</div>
-        <div>bytedev.app &copy; 2026</div>
     </div>
 </body>
 

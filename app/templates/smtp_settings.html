@@ -1,6 +1,6 @@
-<section class="card" id="smtp-settings">
+<section class="card smtp-section" id="smtp-settings">
     <h2>Email notifications (SMTP)</h2>
-    <p class="accounts-hint">Invitations use your saved Panel Name for <code>{% raw %}{{servername}}{% endraw %}</code> in the welcome message and subject. Change it in the panel appearance settings above.</p>
+    <p class="accounts-hint">Invitations use your saved Server name for <code>{% raw %}{{servername}}{% endraw %}</code> in the welcome message and subject. Change it in General settings. Byte Panel branding stays unchanged.</p>
     <p class="accounts-hint">Invitations arrive as two emails: a welcome with the panel link and username, then a separate generated temporary password sent about 12 seconds later. Inbox arrival times may vary. Temporary passwords expire after 24 hours and must be changed before panel access. Chosen passwords are never emailed. Save these settings before testing.</p>
     <p class="accounts-hint">Gmail: use <code>smtp.gmail.com</code>, port <code>587</code>, STARTTLS and your full email address as the username. This panel uses password authentication, so use a <a href="https://support.google.com/accounts/answer/185833" target="_blank" rel="noopener noreferrer">Google app password</a> with 2-Step Verification enabled, not your normal Google password.</p>
     <div id="smtp-message" class="accounts-message" role="status" aria-live="polite" hidden></div>

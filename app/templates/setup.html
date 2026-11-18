@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MC-Panel - Setup</title>
+    <title>Setup - Byte Panel</title>
     <script src="{{ url_for('static', filename='password_policy.js', v=app_version) }}" defer></script>
     <script src="{{ url_for('static', filename='setup_progress.js', v=app_version) }}" defer></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -153,8 +153,9 @@
         .stage-btn-primary:hover { background: var(--accent-hover); }
     </style>
     {% include 'panel_access.html' %}
+    {% include 'panel_ui.html' %}
 </head>
-<body class="theme-{{ config.theme }}">
+<body class="theme-{{ config.theme }} obsidian page-setup" data-accent="{{ config.get('accent', 'lime') }}">
     <div class="overlay">
         <div class="setup-container">
         <h2>Server Initialization Engine</h2>

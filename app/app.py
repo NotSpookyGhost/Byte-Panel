@@ -24,7 +24,8 @@ from plugin_manager import register_plugin_manager
 from panel_security import PanelSecurity
 from panel_accounts import grants, session_grants
 from minecraft_releases import MinecraftReleases, DOWNLOAD_HEADERS, java_path
-from server_backups import ServerBackups, BackupBusy, backup_error
+from server_backups import ServerBackups, BackupBusy, backup_error, backup_server_key
+from server_icon import panel_icon_path, save_server_icon, ServerIconError
 
 release_service = MinecraftReleases()
 
@@ -164,7 +165,8 @@ DEFAULT_CONFIG = {
     "launch_type": "",
     "launch_target": "",
     "theme": "dark",
-    "panel_name": "Portal Node",
+    "panel_name": "Byte Panel",
+    "accent": "lime",
     "bg_blur": 5,
     "bg_tint": 50,
     "timezone": "UTC",
@@ -182,6 +184,10 @@ def load_config():
         for k, v in DEFAULT_CONFIG.items():
             if k not in conf:
                 conf[k] = v
+        # Product branding is fixed; the server keeps its independent display name.
+        conf["panel_name"] = "Byte Panel"
+        if conf.get("accent") not in ("lime", "yellow", "blue"):
+            conf["accent"] = "lime"
         return conf
 
 def save_config(config):
@@ -990,10 +996,19 @@ def rename_backup():
 def backups_page():
     if not session.get('logged_in'):
         return redirect(url_for('login'))
-    return render_template('backups.html', config=load_config(), has_custom=get_custom_assets_state())
+    config = load_config()
+    return render_template('backups.html', config=config, has_custom=get_custom_assets_state(),
+                           current_backup_key=backup_server_key(config.get('server_name', 'My Server')))
 
 @app.route('/branding-assets/<filename>')
 def serve_custom_branding(filename):
+    if filename == 'logo.png':
+        icon = panel_icon_path(SERVER_DIR, BRANDING_DIR)
+        if icon is None:
+            abort(404)
+        response = send_file(icon, conditional=True, max_age=0)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
     return send_from_directory(BRANDING_DIR, filename)
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -1263,8 +1278,25 @@ def api_setup_progress():
 
 @app.route('/')
 @app.route('/overview')
-def overview(): 
-    return render_template('overview.html', config=load_config(), has_custom=get_custom_assets_state())
+def overview():
+    activity = []
+    activity_message = "Player connections will appear here when they are recorded."
+    if security.can('players.view'):
+        try:
+            with closing(sqlite3.connect(PLAYER_DB_FILE, timeout=2)) as conn:
+                conn.row_factory = sqlite3.Row
+                activity = [dict(row) for row in conn.execute("""
+                    SELECT u.username, e.timestamp FROM login_events e
+                    JOIN users u ON u.uuid = e.uuid
+                    ORDER BY e.event_id DESC LIMIT 6
+                """)]
+        except sqlite3.Error:
+            app.logger.warning("Recent player activity could not be read.")
+            activity_message = "Activity history is temporarily unavailable."
+    else:
+        activity_message = "Player-history permission is required to view connection activity."
+    return render_template('overview.html', config=load_config(), has_custom=get_custom_assets_state(),
+                           recent_activity=activity, activity_message=activity_message)
 
 @app.route('/console')
 def console(): 
@@ -1418,8 +1450,10 @@ def moderate_player(action):
     return jsonify({"status": "success"})
 
 def get_custom_assets_state():
+    icon = panel_icon_path(SERVER_DIR, BRANDING_DIR)
     return {
-        "logo": os.path.exists(os.path.join(BRANDING_DIR, 'logo.png')),
+        "logo": icon is not None,
+        "server_icon": icon is not None and icon.name == 'server-icon.png',
         "favicon": os.path.exists(os.path.join(BRANDING_DIR, 'favicon.ico')),
         "bg": os.path.exists(os.path.join(BRANDING_DIR, 'bg.jpg'))
     }
@@ -1514,10 +1548,22 @@ def properties():
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
     config = load_config()
+    settings_message = None
     if request.method == 'POST':
         config['theme'] = request.form.get('theme', config.get('theme', 'dark'))
         config['java_path'] = request.form.get('java_path', config.get('java_path'))
-        config['panel_name'] = request.form.get('panel_name', config.get('panel_name'))
+        accent = request.form.get('accent', config.get('accent', 'lime'))
+        server_name = request.form.get('server_name', config.get('server_name', '')).strip()
+        if accent not in ('lime', 'yellow', 'blue'):
+            return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
+                                   settings_error='Choose a supported accent color.'), 400
+        if 'server_name' in request.form and (not server_name or len(server_name) > 80 or
+                                              re.search(r'[\x00-\x1f\x7f]', server_name)):
+            return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
+                                   settings_error='Server name must be 1–80 characters without control characters.'), 400
+        config['accent'] = accent
+        config['server_name'] = server_name
+        config['panel_name'] = 'Byte Panel'
         config['bg_blur'] = request.form.get('bg_blur', config.get('bg_blur', 25))
         config['bg_tint'] = request.form.get('bg_tint', config.get('bg_tint', 50))
         config['timezone'] = request.form.get('timezone', config.get('timezone', 'UTC'))
@@ -1527,8 +1573,21 @@ def settings():
         config['auto_backup_enabled'] = request.form.get('auto_backup_enabled') == 'true'
         config['auto_backup_freq'] = request.form.get('auto_backup_freq', config.get('auto_backup_freq', 'weekly'))
         config['auto_backup_keep'] = int(request.form.get('auto_backup_keep', config.get('auto_backup_keep', 5)))
-        if 'custom_logo' in request.files and request.files['custom_logo'].filename:
-            request.files['custom_logo'].save(os.path.join(BRANDING_DIR, 'logo.png'))
+        # Accept the legacy field for an already-open Settings page, but use the
+        # same validation and canonical server file for both upload names.
+        icon_upload = request.files.get('server_icon') or request.files.get('custom_logo')
+        if icon_upload and icon_upload.filename:
+            try:
+                with server_backups.exclusive():
+                    save_server_icon(icon_upload.stream, SERVER_DIR)
+            except (ServerIconError, BackupBusy) as error:
+                return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
+                                       settings_error=str(error)), 409 if isinstance(error, BackupBusy) else 400
+            except OSError:
+                app.logger.exception('Could not save server icon')
+                return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
+                                       settings_error='Could not save the server icon. Check disk space and server-folder permissions.'), 500
+            settings_message = 'Settings saved. Server icon updated in the panel. Restart Minecraft, then refresh the multiplayer list to see it there.'
         if 'custom_favicon' in request.files and request.files['custom_favicon'].filename:
             request.files['custom_favicon'].save(os.path.join(BRANDING_DIR, 'favicon.ico'))
         if 'custom_bg' in request.files and request.files['custom_bg'].filename:
@@ -1536,7 +1595,8 @@ def settings():
             
         save_config(config)
     
-    return render_template('settings.html', config=config, has_custom=get_custom_assets_state())
+    return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
+                           settings_message=settings_message)
 
 @app.route('/start', methods=['POST'])
 def start_server():
@@ -1629,7 +1689,8 @@ def api_create_backup():
         if payload.get('background') is True:
             return jsonify(server_backups.start(security.store.scope(), is_restore)), 202
         zip_path = create_backup(server_name, is_manual=True, is_restore_backup=is_restore)
-        return jsonify({"status": "success", "file": os.path.basename(zip_path)})
+        return jsonify({"status": "success", "file": os.path.basename(zip_path),
+                        "server_key": os.path.basename(os.path.dirname(zip_path))})
     except BackupBusy as e:
         return jsonify(status='error', message=str(e)), 409
     except Exception as e:

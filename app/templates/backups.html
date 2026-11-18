@@ -74,44 +74,16 @@
     </style>
     {% include 'panel_access.html' %}
     <script src="{{ url_for('static', filename='backup_progress.js') }}?v={{ app_version }}"></script>
+    {% include 'panel_ui.html' %}
 </head>
-<body class="theme-{{ config.theme }}">
-    <div class="sidebar">
-        <div class="nav-group">
-            <div class="sidebar-header">
-                {% if has_custom.logo %}
-                <img class="sidebar-logo" src="/branding-assets/logo.png" alt="Logo">
-                {% else %}
-                <img class="sidebar-logo" src="{{ url_for('static', filename='bytedev_logo.png') }}" alt="Default Logo">
-                {% endif %}
-                <h2>{{ config.panel_name }}</h2>
-            </div>
-            <a href="/overview">Overview</a>
-            {% if can is not defined or can('console.view') %}<a href="/console">Console</a>{% endif %}
-            {% if can is not defined or can('logs.view') %}<a href="/logs">Logs</a>{% endif %}
-            {% if can is not defined or can('players.view') %}<a href="/players">Players</a>{% endif %}
-            {% include 'plugins_nav.html' %}
-            {% if can is not defined or can('properties.manage') %}<a href="/properties">Properties</a>{% endif %}
-            {% if can is not defined or (can('backups.create') or can('backups.restore')) %}<a href="/backups" class="active">Backups</a>{% endif %}
-            {% if can is not defined or can('settings.manage') %}<a href="/settings">Settings</a>{% endif %}
-                {% include 'accounts_nav.html' %}
-        </div>
-        <div class="sidebar-footer" style="padding-top: 20px; text-align: center; border-top: 1px solid var(--border);">
-            <div style="font-weight: 600; margin-bottom: 12px; color: var(--text-main);">{{ current_user.username if current_user else config.admin_user }}</div>
-            <form action="/logout" method="GET" style="margin: 0;">
-                <button type="submit" class="btn"
-                    style="width: 100%; border: 1px solid var(--text-muted); background: transparent; color: var(--text-main); border-radius: 8px; padding: 8px 0; cursor: pointer;">Logout</button>
-            </form>
-        </div>
-    </div>
+<body class="theme-{{ config.theme }} obsidian page-backups " data-accent="{{ config.get('accent', 'lime') }}" data-restricted="{{ 'true' if current_user is defined and current_user and current_user.must_change_password else 'false' }}">
+    {% set page_title = 'Backups' %}
+    {% include 'panel_sidebar.html' %}
+
     <div class="main-layout">
-        <div class="top-action-bar">
-            <div>Server Backups | <span style="color: var(--text-muted);">{{ config.get('server_name', 'My Server') }}</span> <span id="total-storage-label" style="font-size: 14px; color: var(--text-muted); margin-left: 12px; font-weight: normal;"></span></div>
-            <div style="display:flex; gap:10px;">
-                {% if can('backups.create') %}<button data-permission="backups.create" class="btn" style="background: var(--accent); color: white;" onclick="createManualBackup()">Create Manual Backup</button>{% endif %}
-            </div>
-        </div>
-        <div class="main-content">
+        {% set page_actions %}<span id="total-storage-label" class="metric-note"></span>{% if can('backups.create') %}<button data-permission="backups.create" class="btn btn-primary" onclick="createManualBackup()">Create Manual Backup</button>{% endif %}{% endset %}
+{% include 'panel_header.html' %}
+        <div class="main-content" id="panel-content" tabindex="-1">
             <div id="backups-container">
                 <p style="color: var(--text-muted);">Loading backups...</p>
             </div>
@@ -119,7 +91,8 @@
     </div>
     
     <script>
-        const currentServerName = "{{ config.get('server_name', 'My Server') }}";
+        const currentServerName = {{ config.get('server_name', 'My Server') | tojson }};
+        const currentServerKey = {{ current_backup_key | tojson }};
         
         const configTz = "{{ config.get('timezone', 'UTC') }}";
         const configTimeFormat = "{{ config.get('time_format', '12') }}";
@@ -180,13 +153,13 @@
             
             let html = '';
             
-            if (backupsMap[currentServerName]) {
-                html += renderServerSection(currentServerName, backupsMap[currentServerName], true);
-            }
+            // Folder keys are normalized by the backend (e.g. spaces become underscores).
+            // Keep the display name separate: all file actions still use the actual folder.
+            html += renderServerSection(currentServerKey, backupsMap[currentServerKey] || [], true);
             
             let othersHTML = '';
             for (let srv in backupsMap) {
-                if (srv !== currentServerName) {
+                if (srv !== currentServerKey) {
                     othersHTML += renderServerSection(srv, backupsMap[srv], false);
                 }
             }
@@ -199,7 +172,14 @@
             container.innerHTML = html;
         }
         
+        function escapeBackupLabel(value) {
+            return String(value).replace(/[&<>"']/g, char => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[char]));
+        }
+
         function renderServerSection(serverName, files, isCurrent) {
+            const serverLabel = escapeBackupLabel(isCurrent ? currentServerName : serverName);
             let manualFiles = files.filter(f => f.type === 'manual');
             let autoFiles = files.filter(f => f.type === 'auto');
             
@@ -211,15 +191,15 @@
             if (!isCurrent) {
                 html += `<details style="margin-bottom: 32px; background: var(--bg-card); border-radius: 8px; border: 1px solid var(--border); padding: 16px;">
                     <summary style="font-size: 20px; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;">
-                        ${serverName}
+                        ${serverLabel}
                         <span style="font-size: 14px; font-weight: 400; color: var(--text-muted); margin-left: auto;">${sizeStr}</span>
                     </summary>
                     <div style="margin-top: 24px;">`;
             } else {
                 html += `<div style="margin-bottom: 32px;">
                     <h3 style="font-size: 20px; font-weight: 600; margin: 0 0 12px 0; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
-                        ${serverName}
-                        <span style="font-size: 12px; background: var(--accent); color: white; padding: 2px 8px; border-radius: 12px; font-weight: 500;">Current Server</span>
+                        ${serverLabel}
+                        <span style="font-size: 12px; background: var(--accent); color: var(--accent-ink); padding: 2px 8px; border-radius: 12px; font-weight: 500;">Current Server</span>
                         <span style="font-size: 14px; font-weight: 400; color: var(--text-muted); margin-left: auto;">${sizeStr}</span>
                     </h3>`;
             }
@@ -248,7 +228,7 @@
         
         function renderBackupTable(serverName, files, isManual) {
             let html = `
-            <table class="roster-table">
+            <div class="table-scroll"><table class="roster-table">
                 <thead>
                     <tr>
                         <th>Backup Archive</th>
@@ -292,7 +272,7 @@
                 `;
             });
             
-            html += `</tbody></table>`;
+            html += `</tbody></table></div>`;
             return html;
         }
         
@@ -514,10 +494,5 @@
         
         fetchBackups();
     </script>
-    <div
-        style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
-        <div>Byte Panel {{ app_version }}</div>
-        <div>bytedev.app &copy; 2026</div>
-    </div>
 </body>
 </html>

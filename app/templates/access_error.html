@@ -1,2 +1,24 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Access unavailable</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">{% include 'panel_access.html' %}</head>
-<body class="theme-{{ config.theme }}"><main class="card" style="max-width:560px;margin:10vh auto;padding:32px"><h1>Access unavailable</h1><p>{{ message }}</p><p><a href="/overview">Return to panel</a> · <a href="/login">Sign in</a> · <a href="/logout">Sign out</a></p></main></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Access unavailable - Byte Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% include 'panel_access.html' %}
+    {% include 'panel_ui.html' %}
+</head>
+<body class="theme-{{ config.theme }} obsidian{% if not current_user %} page-login{% endif %}" data-accent="{{ config.get('accent', 'lime') }}" data-restricted="{{ 'true' if current_user and current_user.must_change_password else 'false' }}">
+    {% if current_user %}
+    {% set page_title = 'Access unavailable' %}
+    {% include 'panel_sidebar.html' %}
+    <main class="main-layout">
+        {% include 'panel_header.html' %}
+        <div class="main-content" id="panel-content" tabindex="-1"><section class="card">
+            <p>{{ message }}</p><a class="btn btn-primary" href="{{ '/account' if current_user.must_change_password else '/overview' }}">Return to panel</a>
+        </section></div>
+    </main>
+    {% else %}
+    <main class="login-wrap"><section class="card login-card"><h1>Access unavailable</h1><p>{{ message }}</p><a class="btn btn-primary" href="/login">Sign in</a></section></main>
+    {% endif %}
+</body>
+</html>

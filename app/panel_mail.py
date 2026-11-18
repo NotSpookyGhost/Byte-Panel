@@ -187,11 +187,13 @@ class PanelMailer:
         self.load_panel_config = load_panel_config or (lambda: {})
 
     def panel_name(self):
-        # Read on every invitation so renaming the panel needs no restart.
-        name = self.load_panel_config().get('panel_name', '')
+        return 'Byte Panel'
+
+    def server_name(self):
+        # Read for every invitation; server labels are independent of product branding.
+        name = self.load_panel_config().get('server_name', '')
         if not isinstance(name, str):
             name = ''
-        # Panel names also appear in the subject; don't allow header newlines.
         return re.sub(r'[\x00-\x1f\x7f]', ' ', name).strip() or 'Byte Panel'
 
     def config(self, public=False):
@@ -311,8 +313,8 @@ class PanelMailer:
         if not self.store.invitation_is_current(user):
             return 'cancelled'
         expires = datetime.fromtimestamp(user['temporary_password_expires'], timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
-        name = self.panel_name()
-        values = dict(servername=name, panel_name=name, username=user['username'],
+        name = self.server_name()
+        values = dict(servername=name, panel_name=self.panel_name(), username=user['username'],
                       login_url=config['panel_url'].rstrip('/') + '/login',
                       temporary_password='', password='', expires=expires)
         subject = render_email_text('Welcome to {{servername}} - your panel sign-in details', values)

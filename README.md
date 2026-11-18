@@ -23,7 +23,7 @@ settings kept in a persistent `/data` volume.
   permissions, including separate backup creation and restore access.
 - **Email invitations:** SMTP delivery, customizable welcome/password emails,
   generated temporary passwords and required password changes on first login.
-- **Customization:** Panel name, branding and appearance settings.
+- **Customization:** Server name and icon, favicon, background and appearance settings.
 
 ## Using and configuring the panel
 
@@ -35,7 +35,33 @@ an existing server ZIP. Available versions depend on the engine.
 Use **Overview** for server controls, **Console** for commands, **Logs** and
 **Players** to review activity, and **Properties** to edit server settings.
 Stop the server before changing files that it uses, then restart when required.
-Use **Settings** to change the panel name, branding and appearance.
+Use **Panel Settings → General** to change the server name. The product name
+stays **Byte Panel**. Settings are grouped into General, Runtime, Backups,
+Appearance, Email and Operations.
+
+**Appearance** offers the Obsidian theme and independent lime (default), yellow
+or electric-blue accents. Existing light/true-black themes and custom images
+remain available. Server status colors are always green (online), amber
+(starting/stopping/restarting) and red (offline); unknown status is neutral.
+
+Click your username at the bottom of the sidebar to open **My Account**.
+On mobile, use the menu button to open navigation.
+
+Overview shows measured CPU/process memory and recent recorded player connections
+when you have Players permission. TPS is marked unavailable because the current
+backend does not measure it; it is not a live TPS monitor.
+
+### Server icon
+
+Open **Panel Settings → General → Server icon**, choose a PNG, JPEG or WebP (up to
+5 MiB and 16 million pixels), then save. Byte Panel creates a 64×64 PNG without
+stretching or cropping and uses it for the panel logo and server badge. Restart
+Minecraft and refresh the multiplayer list to see the same icon in-game.
+
+The image is stored as `server/server-icon.png` in the data volume, so server
+backups and imports carry it with them. An existing panel-only logo remains a
+fallback; upload it here once to also apply it to Minecraft. The favicon and
+background controls stay under Appearance. Purging a server clears its server icon.
 
 ### Plugins, configs and data files
 
@@ -78,7 +104,7 @@ The temporary password expires after **24 hours** and must be changed on first l
 
 Passwords must be **12–256 characters**, with at least one uppercase letter,
 number and ASCII punctuation symbol, such as `!`, `@` or `#`. Users change their
-password under **My account**.
+password under **My Account** (click your sidebar username).
 
 Only the original setup owner can purge the server. Creating/managing backups,
 restoring backups and importing a server ZIP are separate permissions.
@@ -86,7 +112,7 @@ Grant file, console, restore and user-management access only to trusted users.
 
 ### Email notifications and templates
 
-1. Open **Settings → Email notifications (SMTP)** and enable delivery.
+1. Open **Panel Settings → Email** and enable delivery.
 2. Enter your provider's hostname, port, security mode, credentials, sender
    address and public panel URL. Enable automatic new-user emails.
 3. Save the settings, then send a test email before inviting users.
@@ -100,7 +126,7 @@ Customize the email designs in:
 - [templates/welcomeTemplate.json](templates/welcomeTemplate.json)
 - [templates/passwordTemplate.json](templates/passwordTemplate.json)
 
-Use `{{servername}}` for the **Panel Name**, `{{username}}` for the login name,
+Use `{{servername}}` for the **Server name** (Settings → General), `{{username}}` for the login name,
 `{{login_url}}` for the sign-in link and `{{expires}}` for the password expiry.
 `{{password}}` is available **only in the second email**.
 

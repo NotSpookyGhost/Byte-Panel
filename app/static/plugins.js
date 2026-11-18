@@ -194,8 +194,19 @@
         run(async () => {
             await loadFile(path);
             notice.hidden = true;
-        });
+            const editorPanel = document.querySelector('.plugins-editor');
+            if (editorPanel && window.matchMedia('(max-width: 1199px)').matches) editorPanel.scrollIntoView({block:'start', behavior:'auto'});
+        }).then(() => { if (selected === path) editor.focus(); });
     }
+    const backToFiles = document.getElementById('back-to-files');
+    if (backToFiles) backToFiles.addEventListener('click', () => {
+        if (busy || !confirmDiscard()) return;
+        resetEditor();
+        updateControls();
+        const browser = document.querySelector('.plugins-browser');
+        if (browser) browser.scrollIntoView({block:'start', behavior:'auto'});
+        document.getElementById('refresh-files').focus();
+    });
     document.getElementById('refresh-files').addEventListener('click', () => run(() => loadFolder(folder)));
     reloadButton.addEventListener('click', () => { if (selected) openFile(selected); });
     editor.addEventListener('input', updateControls);

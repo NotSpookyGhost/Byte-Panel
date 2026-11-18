@@ -1,0 +1,5 @@
+{% from 'ui_icons.html' import icon %}
+<header class="panel-header">
+    <div class="header-heading"><button type="button" class="icon-button menu-toggle" id="menu-toggle" aria-label="Open navigation" aria-expanded="false" aria-controls="panel-sidebar">{{ icon('menu') }}</button><div><div class="header-eyebrow">{{ config.get('server_name') or 'SERVER MANAGEMENT' }}</div><h1>{{ page_title | default('Byte Panel') }}</h1></div></div>
+    <div class="header-right"><span class="server-status" data-server-status data-state="unknown"><span class="state-dot" data-server-dot data-state="unknown" aria-hidden="true"></span><span data-status-label>Checking status</span></span><div class="header-actions">{{ page_actions | default('') | safe }}</div></div>
+</header>

@@ -19,7 +19,7 @@ class EmailTemplateTests(unittest.TestCase):
         delay = patch('panel_mail.sleep')
         self.delay = delay.start()
         self.addCleanup(delay.stop)
-        self.config = {'panel_name': 'Byte Community', 'server_name': 'Different Minecraft Server'}
+        self.config = {'panel_name': 'Legacy Panel Branding', 'server_name': 'Byte Community'}
         self.mailer = PanelMailer(self.store, lambda: self.config)
         self.user = {'username': 'player', 'email': 'player@example.com',
                      'temporary_password_expires': 2000000000}
@@ -40,7 +40,7 @@ class EmailTemplateTests(unittest.TestCase):
         text = '{{7 * 7}} {% include "private" %} {{config.secret}}'
         self.assertEqual(render_email_text(text, {}), text)
 
-    def test_invitation_uses_panel_name_and_preserves_sign_in_details(self):
+    def test_invitation_uses_server_name_and_preserves_sign_in_details(self):
         with patch.object(self.mailer, 'send') as send:
             self.assertEqual(self.mailer.welcome(self.user, 'temporary-test-password'), 'sent')
         self.assertEqual(send.call_count, 2)
@@ -56,7 +56,7 @@ class EmailTemplateTests(unittest.TestCase):
         self.assertNotIn('Temporary password:', body)
         self.assertIn('second email', body)
         self.assertIn('Panel access stays locked until you change', body)
-        self.assertNotIn('Different Minecraft Server', body)
+        self.assertNotIn('Legacy Panel Branding', body)
         self.assertNotIn('{{', body)
         self.assertNotIn('temporary-test-password', subject)
         recipient, subject, password_body = send.call_args_list[1].args
@@ -70,7 +70,7 @@ class EmailTemplateTests(unittest.TestCase):
     def test_name_is_loaded_again_for_each_invitation(self):
         with patch.object(self.mailer, 'send') as send:
             self.mailer.welcome(self.user, 'first-password')
-            self.config['panel_name'] = 'Renamed Panel'
+            self.config['server_name'] = 'Renamed Panel'
             self.mailer.welcome(self.user, 'second-password')
         self.assertIn('Byte Community', send.call_args_list[0].args[1])
         self.assertIn('Byte Community', send.call_args_list[1].args[1])
@@ -81,12 +81,12 @@ class EmailTemplateTests(unittest.TestCase):
     def test_default_name_for_missing_or_invalid_names(self):
         for name in (None, '', ' \r\n\t ', 123):
             with self.subTest(name=name):
-                self.config['panel_name'] = name
-                self.assertEqual(self.mailer.panel_name(), 'Byte Panel')
-        self.assertEqual(PanelMailer(self.store).panel_name(), 'Byte Panel')
+                self.config['server_name'] = name
+                self.assertEqual(self.mailer.server_name(), 'Byte Panel')
+        self.assertEqual(PanelMailer(self.store).server_name(), 'Byte Panel')
 
     def test_control_characters_cannot_create_email_headers(self):
-        self.config['panel_name'] = 'Byte\r\nBcc: other@example.com\x00\x7f'
+        self.config['server_name'] = 'Byte\r\nBcc: other@example.com\x00\x7f'
         with patch.object(self.mailer, 'send') as send:
             self.mailer.welcome(self.user, 'temporary-test-password')
         subject = send.call_args.args[1]
@@ -97,7 +97,7 @@ class EmailTemplateTests(unittest.TestCase):
         message.as_bytes()
 
     def test_unicode_and_markup_remain_plain_text(self):
-        self.config['panel_name'] = 'Caf\u00e9 <Builders> & Friends'
+        self.config['server_name'] = 'Caf\u00e9 <Builders> & Friends'
         with patch.object(self.mailer, 'send') as send:
             self.mailer.welcome(self.user, 'temporary-test-password')
         _, subject, body = send.call_args_list[0].args
@@ -188,12 +188,11 @@ class EmailTemplateTests(unittest.TestCase):
         send.assert_not_called()
         self.delay.assert_not_called()
 
-    def test_panel_name_alias_matches_servername(self):
-        name = self.mailer.panel_name()
-        self.assertEqual(
-            render_email_text('{{servername}} / {{panel_name}}',
-                              {'servername': name, 'panel_name': name}),
-            'Byte Community / Byte Community')
+    def test_server_name_and_product_brand_are_independent(self):
+        with patch('panel_mail.WELCOME_TEMPLATE') as template, patch.object(self.mailer, 'send') as send:
+            template.read_text.return_value = '{{servername}} / {{panel_name}}'
+            self.mailer.welcome(self.user, 'Generated-password-123!')
+        self.assertEqual(send.call_args_list[0].args[2], 'Byte Community / Byte Panel')
 
 
 if __name__ == '__main__':

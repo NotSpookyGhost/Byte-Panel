@@ -1,34 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <title>Sign in - Byte Panel</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <title>Login - Panel Access</title>
-    {% if has_custom.favicon %}
-    <link rel="icon" href="/branding-assets/favicon.ico">
-    {% else %}
-    <link rel="icon" href="{{ url_for('static', filename='bytedev_logo.png') }}">
-    {% endif %}
+    <link rel="icon" href="{{ '/branding-assets/favicon.ico' if has_custom.favicon else url_for('static', filename='bytedev_logo.png') }}">
     {% include 'panel_access.html' %}
+    {% include 'panel_ui.html' %}
 </head>
-<body class="theme-{{ config.theme }}" style="background: url('{% if has_custom.bg %}/branding-assets/bg.jpg{% else %}{{ url_for('static', filename='bg.jpg') }}{% endif %}') no-repeat center center fixed; background-size: cover; color: var(--text-main); margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; height: 100vh;">
-    <div style="position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,{{ (config.get('bg_tint', 50) | float) / 100 }}); backdrop-filter: blur({{ config.get('bg_blur', 5) }}px); -webkit-backdrop-filter: blur({{ config.get('bg_blur', 5) }}px);">
-        <div class="card" style="width: 380px; z-index: 10;">
-        <h2>🔐 Core Authorization</h2>
-        {% if error %}<p style="color:var(--accent-crimson);">{{ error }}</p>{% endif %}
-        <form method="POST">
-            <div style="margin-bottom:12px;">
-                <input type="text" name="username" placeholder="Username" required>
-            </div>
-            <div style="margin-bottom:20px;">
-                <input type="password" name="password" placeholder="Password" required>
-            </div>
-            <button type="submit" class="btn btn-primary" style="width:100%;">Authenticate</button>
-        </form>
-        </div>
-    </div>
-    <div style="position: fixed; bottom: 10px; right: 10px; text-align: right; font-size: 0.8rem; color: var(--text-muted, rgba(255,255,255,0.5)); opacity: 0.7; z-index: 9999; pointer-events: none;">
-        <div>Byte Panel {{ app_version }}</div>
-        <div>bytedev.app &copy; 2026</div>
-    </div>
+<body class="theme-{{ config.theme }} obsidian page-login" data-accent="{{ config.get('accent', 'lime') }}">
+    {% from 'ui_icons.html' import brand %}
+    {% if has_custom.bg %}<div class="login-background" style="background-image:url('/branding-assets/bg.jpg')"><div class="login-background-overlay" style="background:rgba(0,0,0,{{ config.get('bg_tint', 50) | float / 100 }});backdrop-filter:blur({{ config.get('bg_blur', 5) }}px)"></div></div>{% endif %}
+    <main class="login-wrap">
+        <div class="login-brand">{% if has_custom.logo %}<img class="login-logo" src="/branding-assets/logo.png" alt="">{% else %}{{ brand() }}{% endif %}<span>Byte Panel</span></div>
+        <section class="card login-card">
+            <h1>Welcome back</h1>
+            <p>Sign in to manage {{ config.get('server_name') or 'your Minecraft server' }}.</p>
+            {% if error %}<p class="login-error" role="alert">{{ error }}</p>{% endif %}
+            <form method="POST">
+                <label for="login-username">Username</label>
+                <input id="login-username" type="text" name="username" placeholder="Enter your username" autocomplete="username" required>
+                <label for="login-password">Password</label>
+                <input id="login-password" type="password" name="password" placeholder="Enter your password" autocomplete="current-password" required>
+                <button type="submit" class="btn btn-primary">Sign in</button>
+            </form>
+        </section>
+        <footer class="login-footer">Byte Panel {{ app_version }} · Your server. Your control.</footer>
+    </main>
 </body>
 </html>
