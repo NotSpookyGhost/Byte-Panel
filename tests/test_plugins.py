@@ -1,6 +1,7 @@
 """Plugin routes tested against temporary server data, without booting Minecraft."""
 
 import gzip
+from contextlib import contextmanager
 import io
 from pathlib import Path
 import sys
@@ -9,7 +10,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from flask import Flask, render_template
+from flask import Flask, abort, render_template
 
 APP_DIR = Path(__file__).resolve().parents[1] / 'app'
 sys.path.insert(0, str(APP_DIR))
@@ -30,8 +31,12 @@ class PluginManagerTests(unittest.TestCase):
         self.app = Flask(__name__, template_folder=str(APP_DIR / 'templates'),
                          static_folder=str(APP_DIR / 'static'))
         self.app.config.update(SECRET_KEY='test-only', TESTING=True)
+        self.guard_busy = False
+        self.guard_active = False
+        self.guard_entries = 0
         plugin_manager.register_plugin_manager(
             self.app, self.server, self.data, lambda: self.config, lambda: {},
+            mutation_guard=self.mutation_guard,
         )
         self.client = self.app.test_client()
         with self.client.session_transaction() as session:
@@ -39,10 +44,26 @@ class PluginManagerTests(unittest.TestCase):
             session['plugin_csrf_token'] = 'test-csrf'
         self.headers = {'X-Plugin-CSRF-Token': 'test-csrf'}
 
-    def jar(self, descriptor='plugin.yml'):
+    @contextmanager
+    def mutation_guard(self):
+        if self.guard_busy:
+            abort(409, description='A backup or server file operation is already running.')
+        self.guard_active = True
+        self.guard_entries += 1
+        try:
+            yield
+        finally:
+            self.guard_active = False
+
+    def jar(self, descriptor='plugin.yml', metadata=None):
         contents = io.BytesIO()
         with zipfile.ZipFile(contents, 'w') as archive:
-            archive.writestr(descriptor, 'name: Demo\nversion: 1.0\nmain: example.Demo\n')
+            if metadata is None:
+                metadata = {'fabric.mod.json': '{"schemaVersion":1,"id":"demo","version":"1.0"}',
+                            'META-INF/mods.toml': 'modLoader="javafml"\n[[mods]]\nmodId="demo"\n',
+                            'mcmod.info': '[{"modid":"demo","name":"Demo","version":"1.0"}]'}.get(
+                                descriptor, 'name: Demo\nversion: 1.0\nmain: example.Demo\n')
+            archive.writestr(descriptor, metadata)
         return contents.getvalue()
 
     def upload(self, content, name='Demo.jar', path='', **kwargs):
@@ -313,7 +334,7 @@ class PluginManagerTests(unittest.TestCase):
         self.assertEqual(guest.post('/api/plugins/upload').status_code, 401)
         self.assertEqual(guest.get('/api/plugins/delete?path=Demo.jar').status_code, 401)
         self.assertEqual(guest.delete('/api/plugins/delete').status_code, 401)
-        for engine in ['Forge', 'Fabric', 'Vanilla', None]:
+        for engine in ['Vanilla', None]:
             self.config['server_type'] = engine
             self.assertEqual(self.client.get('/plugins').status_code, 403)
             self.assertEqual(self.upload(self.jar()).status_code, 403)
@@ -393,6 +414,166 @@ class PluginManagerTests(unittest.TestCase):
             for engine in ['Paper', 'Purpur', 'Forge', 'Vanilla', 'Fabric', None]:
                 markup = render_template('plugins_nav.html', config={'server_type': engine})
                 self.assertEqual('/plugins' in markup, engine in ('Paper', 'Purpur'))
+                self.assertEqual('/mods' in markup, engine in ('Forge', 'Fabric'))
+
+    def test_mod_jars_upload_list_download_and_delete_for_each_loader(self):
+        mod_root = self.server / 'mods'
+        configs = self.server / 'config'
+        configs.mkdir()
+        retained = configs / 'mod.toml'
+        retained.write_text('enabled=true', encoding='utf-8')
+        for engine, descriptor in [('Forge', 'META-INF/mods.toml'), ('Forge', 'mcmod.info'),
+                                   ('Fabric', 'fabric.mod.json')]:
+            with self.subTest(engine=engine, descriptor=descriptor):
+                self.config['server_type'] = engine
+                data = self.jar(descriptor)
+                response = self.upload(data)
+                self.assertEqual(response.status_code, 201, response.json)
+                self.assertEqual((mod_root / 'Demo.jar').read_bytes(), data)
+                self.assertFalse((self.root / 'Demo.jar').exists())
+                self.assertEqual(self.client.get('/api/plugins/files').json['entries'][0]['name'], 'Demo.jar')
+                download = self.client.get('/api/plugins/download?path=Demo.jar')
+                self.assertEqual(download.data, data)
+                download.close()
+                preview = self.client.get('/api/plugins/delete?path=Demo.jar').json
+                deleted = self.client.delete('/api/plugins/delete', json=preview, headers=self.headers)
+                self.assertEqual(deleted.status_code, 200, deleted.json)
+                self.assertIn('Mod JAR deleted', deleted.json['message'])
+                self.assertFalse((mod_root / 'Demo.jar').exists())
+                self.assertEqual((self.data / 'mod-config-backups' / deleted.json['backup']).read_bytes(), data)
+                self.assertEqual(retained.read_text(encoding='utf-8'), 'enabled=true')
+
+    def test_mod_upload_rejects_wrong_loader_and_plugin_descriptors(self):
+        for engine, descriptor in [('Fabric', 'META-INF/mods.toml'), ('Fabric', 'mcmod.info'),
+                                   ('Fabric', 'plugin.yml'), ('Forge', 'fabric.mod.json'),
+                                   ('Forge', 'paper-plugin.yml'), ('Paper', 'fabric.mod.json'),
+                                   ('Purpur', 'META-INF/mods.toml')]:
+            with self.subTest(engine=engine, descriptor=descriptor):
+                self.config['server_type'] = engine
+                response = self.upload(self.jar(descriptor))
+                self.assertEqual(response.status_code, 400, response.json)
+                self.assertFalse((self.server / 'mods' / 'Demo.jar').exists())
+                self.assertFalse((self.root / 'Demo.jar').exists())
+
+    def test_engine_switch_changes_addon_root_without_moving_or_mixing_files(self):
+        plugin = self.jar()
+        self.assertEqual(self.upload(plugin, 'Same.jar').status_code, 201)
+        self.config['server_type'] = 'Fabric'
+        self.assertEqual(self.client.get('/api/plugins/files').json['entries'], [])
+        self.assertFalse((self.server / 'mods').exists(), 'Listing an empty mod root must not write files')
+        mod = self.jar('fabric.mod.json')
+        self.assertEqual(self.upload(mod, 'Same.jar').status_code, 201)
+        self.assertEqual((self.root / 'Same.jar').read_bytes(), plugin)
+        self.assertEqual((self.server / 'mods' / 'Same.jar').read_bytes(), mod)
+        self.assertEqual(self.client.get('/api/plugins/file?path=../plugins/Same.jar').status_code, 400)
+        self.config['server_type'] = 'Paper'
+        download = self.client.get('/api/plugins/download?path=Same.jar')
+        self.assertEqual(download.data, plugin)
+        download.close()
+        self.assertEqual((self.server / 'mods' / 'Same.jar').read_bytes(), mod)
+
+    def test_mod_config_edits_and_data_uploads_stay_inside_mods_root(self):
+        self.config['server_type'] = 'Forge'
+        directory = self.server / 'mods' / 'Demo'
+        directory.mkdir(parents=True)
+        target = directory / 'config.toml'
+        target.write_bytes(b'enabled=true\n')
+        response = self.client.get('/api/plugins/file?path=Demo/config.toml')
+        payload = dict(path='Demo/config.toml', revision=response.json['revision'], content='enabled=false\n')
+        saved = self.client.put('/api/plugins/file', json=payload, headers=self.headers)
+        self.assertEqual(saved.status_code, 200, saved.json)
+        self.assertEqual(target.read_bytes(), b'enabled=false\n')
+        self.assertEqual((self.data / 'mod-config-backups' / saved.json['backup']).read_bytes(), b'enabled=true\n')
+        self.assertEqual(self.upload(b'\x00opaque', 'preset.dat', 'Demo').status_code, 201)
+        self.assertEqual((directory / 'preset.dat').read_bytes(), b'\x00opaque')
+        self.assertEqual(self.upload(self.jar('META-INF/mods.toml'), path='Demo').status_code, 400)
+        self.assertEqual(self.client.get('/api/plugins/files?path=../config').status_code, 400)
+
+    def test_mod_descriptor_reads_are_bounded_and_invalid_metadata_is_rejected(self):
+        self.config['server_type'] = 'Fabric'
+        for metadata in (b'', b'\xff', b'\x00binary'):
+            response = self.upload(self.jar('fabric.mod.json', metadata))
+            self.assertEqual(response.status_code, 400, response.json)
+        oversized = self.jar('fabric.mod.json', b'a' * 17)
+        with patch.object(plugin_manager, 'MAX_DESCRIPTOR_BYTES', 16), \
+             patch.object(zipfile.ZipFile, 'open', side_effect=AssertionError('Oversize descriptor must not be decompressed')):
+            response = self.upload(oversized)
+            self.assertEqual(response.status_code, 400, response.json)
+        self.assertFalse((self.server / 'mods' / 'Demo.jar').exists())
+        self.assertFalse(any(path.name.startswith('.panel-') for path in (self.server / 'mods').iterdir()))
+
+    def test_mod_archive_is_never_extracted_and_metadata_links_are_rejected(self):
+        self.config['server_type'] = 'Fabric'
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as jar:
+            jar.writestr('fabric.mod.json', '{"id":"demo"}')
+            jar.writestr('../escaped.txt', 'must remain inside jar')
+        response = self.upload(archive.getvalue())
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertFalse((self.server / 'escaped.txt').exists())
+        linked = io.BytesIO()
+        with zipfile.ZipFile(linked, 'w') as jar:
+            info = zipfile.ZipInfo('fabric.mod.json')
+            info.external_attr = 0o120777 << 16
+            jar.writestr(info, 'outside.json')
+        self.assertEqual(self.upload(linked.getvalue(), 'linked.jar').status_code, 400)
+
+    def test_mod_pages_have_mod_labels_and_permission_gated_config_link(self):
+        for engine in ('Forge', 'Fabric'):
+            self.config['server_type'] = engine
+            for allowed in (False, True):
+                self.app.jinja_env.globals['can'] = lambda permission: permission != 'files.view' or allowed
+                response = self.client.get('/mods')
+                self.assertEqual(response.status_code, 200, response.data)
+                self.assertIn(b'<title>Mods - Byte Panel</title>', response.data)
+                self.assertIn(b'data-addon-kind="mod" data-root-name="mods"', response.data)
+                self.assertEqual(b'/files?path=config' in response.data, allowed)
+                self.assertNotIn(b'lp import preset.json.gz', response.data)
+                self.assertIn(b'/data/mod-config-backups', response.data)
+            self.assertEqual(self.client.get('/plugins').status_code, 200, 'Legacy page alias stays compatible')
+            self.assertEqual(self.client.post('/api/plugins/upload', data={}).status_code, 403)
+            self.assertEqual(self.client.put('/api/plugins/file', json={}).status_code, 403)
+            self.assertEqual(self.client.delete('/api/plugins/delete', json={}).status_code, 403)
+        self.config['server_type'] = 'Vanilla'
+        self.assertEqual(self.client.get('/mods').status_code, 403)
+
+    def test_mutation_guard_covers_temporary_upload_edit_and_delete_backups(self):
+        target = self.config_file()
+        real_mkstemp = plugin_manager.tempfile.mkstemp
+        def locked_tempfile(*args, **kwargs):
+            self.assertTrue(self.guard_active, 'Mutation reservation must precede any temporary or backup file write')
+            return real_mkstemp(*args, **kwargs)
+        with patch.object(plugin_manager.tempfile, 'mkstemp', side_effect=locked_tempfile):
+            self.assertEqual(self.upload(self.jar()).status_code, 201)
+            original = self.client.get('/api/plugins/file?path=Demo/config.yml').json
+            response = self.client.put('/api/plugins/file', headers=self.headers,
+                                       json=dict(path='Demo/config.yml', revision=original['revision'], content='changed'))
+            self.assertEqual(response.status_code, 200, response.json)
+            preview = self.client.get('/api/plugins/delete?path=Demo.jar').json
+            self.assertEqual(self.client.delete('/api/plugins/delete', headers=self.headers, json=preview).status_code, 200)
+        self.assertEqual(target.read_text(encoding='utf-8'), 'changed')
+        self.assertFalse(self.guard_active)
+        self.assertEqual(self.guard_entries, 3)
+
+    def test_busy_mutation_guard_blocks_every_write_and_releases_after_errors(self):
+        target = self.config_file()
+        self.upload(self.jar())
+        original = self.client.get('/api/plugins/file?path=Demo/config.yml').json
+        preview = self.client.get('/api/plugins/delete?path=Demo.jar').json
+        self.guard_busy = True
+        self.assertEqual(self.upload(self.jar(), 'second.jar').status_code, 409)
+        self.assertEqual(self.client.put('/api/plugins/file', headers=self.headers,
+                         json=dict(path='Demo/config.yml', revision=original['revision'], content='changed')).status_code, 409)
+        self.assertEqual(self.client.delete('/api/plugins/delete', headers=self.headers, json=preview).status_code, 409)
+        self.assertEqual(self.client.get('/api/plugins/files').status_code, 200)
+        self.assertEqual(target.read_bytes(), b'enabled: true\r\n')
+        self.assertTrue((self.root / 'Demo.jar').exists())
+        self.assertFalse((self.root / 'second.jar').exists())
+        self.guard_busy = False
+        self.assertEqual(self.upload(b'invalid').status_code, 400)
+        self.assertFalse(self.guard_active)
+        self.assertEqual(self.client.post('/api/plugins/upload').status_code, 403)
+        self.assertFalse(self.guard_active)
 
 
 if __name__ == '__main__':

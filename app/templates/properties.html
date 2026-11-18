@@ -314,22 +314,15 @@
                 }
             });
 
-            // Poll for server status to refresh if started externally
+            // Reuse the shared status poll instead of issuing another request loop.
             let lastServerStatus = null;
-            async function checkServerStatus() {
-                try {
-                    const res = await fetch('/api/stats').then(r => r.json());
-                    if (lastServerStatus === null) {
-                        lastServerStatus = res.status;
-                    } else if (lastServerStatus !== 'Online' && res.status === 'Online') {
-                        if (!hasUnsavedChanges) {
-                            window.location.reload();
-                        }
-                    }
-                    lastServerStatus = res.status;
-                } catch (e) {}
-            }
-            setInterval(checkServerStatus, 5000);
+            document.addEventListener('panel:stats', event => {
+                const status = event.detail.status;
+                if (lastServerStatus !== null && lastServerStatus !== 'Online' && status === 'Online' && !hasUnsavedChanges) {
+                    window.location.reload();
+                }
+                lastServerStatus = status;
+            });
         });
     </script>
 

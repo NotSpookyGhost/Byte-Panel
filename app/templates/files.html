@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Files - Byte Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='plugins.css', v=app_version) }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='files.css', v=app_version) }}">
+    <link rel="icon" href="{{ '/branding-assets/favicon.ico' if has_custom.favicon else url_for('static', filename='bytedev_logo.png') }}">
+    <script src="{{ url_for('static', filename='plugin_search.js', v=app_version) }}" defer></script>
+    <script src="{{ url_for('static', filename='files.js', v=app_version) }}" defer></script>
+    {% include 'panel_access.html' %}
+    {% include 'panel_ui.html' %}
+</head>
+<body class="theme-{{ config.theme }} obsidian plugins-page page-files" data-accent="{{ config.get('accent', 'lime') }}">
+    {% set page_title = 'Files' %}
+    {% include 'panel_sidebar.html' %}
+    <main class="main-layout" id="file-manager">
+        {% include 'panel_header.html' %}
+        <div class="main-content" id="panel-content" tabindex="-1">
+            <section class="card plugins-upload">
+                <h2>Server files</h2>
+                <p>Browse the complete Minecraft server folder. Stop Minecraft before uploading, editing, moving or deleting files. Panel accounts and SMTP settings are not accessible here.</p>
+                <p class="plugins-hint">Uploads: 256 MiB per file (a proxy may impose a smaller limit). Text editor: 1 MiB, UTF-8 only. Archives are stored, never extracted or executed. Replaced files are saved in /data/file-manager-backups; deleted files/folders move to /data/file-manager-trash for manual recovery.</p>
+                <form id="files-upload-form" data-permission="files.manage">
+                    <label for="files-upload">Upload to the open folder</label>
+                    <div class="plugins-upload-controls">
+                        <input id="files-upload" type="file" multiple required class="file-interactive">
+                        <button id="files-upload-button" class="btn btn-primary file-interactive" type="submit">Upload files</button>
+                    </div>
+                </form>
+            </section>
+            <div id="files-message" class="plugins-message" role="status" aria-live="polite" hidden></div>
+            <div class="plugins-workspace">
+                <section class="card plugins-browser" aria-label="Server file browser">
+                    <div class="plugins-toolbar files-toolbar">
+                        <h2>Files</h2>
+                        <div>
+                            <button id="files-new-folder" class="btn btn-outline file-interactive" data-permission="files.manage" type="button">New folder</button>
+                            <button id="files-new-file" class="btn btn-outline file-interactive" data-permission="files.manage" type="button">New text file</button>
+                            <button id="files-refresh" class="btn btn-outline file-interactive" type="button">Refresh</button>
+                        </div>
+                    </div>
+                    <nav id="files-breadcrumbs" class="plugins-breadcrumbs" aria-label="Server folder"></nav>
+                    <label class="field-label" for="files-filter">Filter this folder</label>
+                    <input id="files-filter" type="search" placeholder="Find a filename..." autocomplete="off">
+                    <p id="files-list-status" class="plugins-hint" role="status"></p>
+                    <div class="plugins-table-scroll">
+                        <table class="plugins-file-table">
+                            <thead><tr><th>Name</th><th>Size</th><th>Actions</th></tr></thead>
+                            <tbody id="files-list"></tbody>
+                        </table>
+                    </div>
+                </section>
+                <section class="card plugins-editor" aria-label="File editor">
+                    <div class="plugins-toolbar">
+                        <h2>Text editor</h2><span id="files-editor-state" class="plugins-hint">No file selected</span>
+                    </div>
+                    <p id="files-editor-path" class="plugins-editor-path"></p>
+                    <div class="config-search">
+                        <label for="files-search">Find in file</label>
+                        <div class="config-search-controls">
+                            <input id="files-search" type="search" autocomplete="off" disabled>
+                            <button id="files-search-previous" class="btn btn-outline" type="button" disabled>Previous</button>
+                            <button id="files-search-next" class="btn btn-outline" type="button" disabled>Next</button>
+                        </div>
+                        <div class="config-search-options">
+                            <label><input id="files-search-case" type="checkbox" disabled> Match case</label>
+                            <span id="files-search-status" class="plugins-hint" role="status"></span>
+                        </div>
+                    </div>
+                    <textarea id="files-content" aria-label="File contents" spellcheck="false" disabled></textarea>
+                    <div class="plugins-editor-actions">
+                        <button id="files-close" class="btn btn-outline file-interactive" type="button">Close</button>
+                        <button id="files-reload" class="btn btn-outline file-interactive" type="button" disabled>Reload</button>
+                        <button id="files-save" class="btn btn-primary file-interactive" data-permission="files.manage" type="button" disabled>Save file</button>
+                    </div>
+                    <p class="plugins-hint">Ctrl/Cmd+F searches the file. Changes are plain text; validate the format before starting Minecraft. Concurrent edits are rejected instead of silently overwritten.</p>
+                </section>
+            </div>
+        </div>
+    </main>
+</body>
+</html>

@@ -1,0 +1,9 @@
+.files-toolbar { flex-wrap:wrap; }
+.files-toolbar > div, .files-actions { display:flex; gap:6px; flex-wrap:wrap; }
+.files-toolbar .btn, .files-actions .btn { padding:6px 9px; font-size:12px; }
+.page-files #files-filter { margin-top:5px; }
+.page-files .plugins-breadcrumbs { margin-bottom:14px; }
+.page-files .plugins-file-table .file-name { min-width:110px; }
+.page-files .plugins-file-table td:last-child { min-width:140px; }
+.page-files .plugins-editor textarea { white-space:pre; overflow:auto; }
+.page-files .plugins-message { margin-top:16px; }

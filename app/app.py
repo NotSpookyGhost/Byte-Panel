@@ -13,7 +13,7 @@ import zipfile
 import sqlite3
 import hashlib
 import urllib.request
-from contextlib import closing
+from contextlib import closing, contextmanager
 from functools import wraps
 import geoip2.database
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory, send_file, make_response, g, abort
@@ -21,6 +21,9 @@ from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
 from datetime import datetime
 from plugin_manager import register_plugin_manager
+from server_files import register_file_manager
+from addon_updates import AddonUpdateService, AddonUpdateError, AddonUpdateBusy
+from log_reader import read_tail, StartupLogStatus
 from panel_security import PanelSecurity
 from panel_accounts import grants, session_grants
 from minecraft_releases import MinecraftReleases, DOWNLOAD_HEADERS, java_path
@@ -31,6 +34,7 @@ from server_icon import server_icon_path, save_server_icon, ServerIconError
 from bluemap import register_bluemap, checked_port
 
 release_service = MinecraftReleases()
+startup_log_status = StartupLogStatus()
 
 def get_client_ip():
     """Extracts the real IP address, bypassing reverse proxy obfuscation."""
@@ -602,7 +606,7 @@ def start_minecraft_server(automatic=False):
         # Append existing console log to full history before clearing
         if os.path.exists(log_path):
             with open(log_path, "r", encoding='utf-8', errors='replace') as src, open(history_path, "a", encoding='utf-8') as dst:
-                dst.write(src.read())
+                shutil.copyfileobj(src, dst, length=128 * 1024)
         else:
             open(log_path, 'a').close()
                 
@@ -615,6 +619,7 @@ def start_minecraft_server(automatic=False):
         # Open in write mode to clear the live console for this session and write header
         with open(log_path, "w", encoding='utf-8') as log_file:
             log_file.write(header)
+        startup_log_status.reset()
             
         log_file = open(log_path, "a", encoding='utf-8')
         
@@ -940,6 +945,7 @@ def api_restore_backup():
         
     server_automation.stop()
     # Wipe current server directory
+    addon_updates.reset()
     for f in os.listdir(SERVER_DIR):
         f_path = os.path.join(SERVER_DIR, f)
         try:
@@ -1519,7 +1525,112 @@ def get_custom_assets_state():
         "bg": os.path.exists(os.path.join(BRANDING_DIR, 'bg.jpg'))
     }
 
-register_plugin_manager(app, SERVER_DIR, DATA_DIR, load_config, get_custom_assets_state)
+def server_process_active():
+    """Fail closed while a managed/unmanaged server or its old log reader is alive."""
+    try:
+        process = MINECRAFT_PROCESS
+        if process is not None and process.poll() is None:
+            return True
+        if MINECRAFT_LOG_THREAD is not None and MINECRAFT_LOG_THREAD.is_alive():
+            return True
+        pid = load_config().get('server_pid')
+        return bool(pid and psutil.pid_exists(pid))
+    except (OSError, ValueError, TypeError):
+        return True
+
+
+@contextmanager
+def server_file_mutation_guard():
+    try:
+        with server_backups.exclusive():
+            if server_process_active():
+                abort(409, description='Stop Minecraft and wait for shutdown to finish before changing server files.')
+            server_automation.stop()
+            yield
+    except BackupBusy as error:
+        abort(409, description=str(error))
+
+
+@contextmanager
+def addon_file_mutation_guard():
+    # Preserve existing online plugin editing, but serialize it with backups.
+    # Loader mods must be changed while stopped; they have no safe hot reload.
+    try:
+        with server_backups.exclusive():
+            if str(load_config().get('server_type', '')).lower() in ('forge', 'fabric'):
+                if server_process_active():
+                    abort(409, description='Stop Minecraft before changing mods.')
+                server_automation.stop()
+            yield
+    except BackupBusy as error:
+        abort(409, description=str(error))
+
+
+register_plugin_manager(app, SERVER_DIR, DATA_DIR, load_config, get_custom_assets_state,
+                        mutation_guard=addon_file_mutation_guard)
+register_file_manager(app, SERVER_DIR, DATA_DIR, load_config, get_custom_assets_state,
+                      mutation_guard=server_file_mutation_guard)
+
+addon_updates = AddonUpdateService(SERVER_DIR, os.path.join(DATA_DIR, 'addon_updates.json'),
+                                  load_config, server_process_active, server_file_mutation_guard)
+
+
+@app.route('/api/addon-updates', methods=['GET', 'PUT'])
+def addon_update_settings():
+    if request.method == 'GET':
+        return jsonify(addon_updates.snapshot())
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify(error='Expected JSON update settings.'), 400
+    try:
+        return jsonify(addon_updates.configure(payload.get('enabled'), payload.get('projects')))
+    except AddonUpdateError as error:
+        return jsonify(error=str(error)), 400
+    except OSError:
+        app.logger.exception('Unable to save add-on update settings')
+        return jsonify(error='Unable to save update settings. Check data permissions and free space.'), 500
+
+
+@app.route('/api/addon-updates/check', methods=['POST'])
+def check_addon_updates():
+    try:
+        return jsonify(addon_updates.start('check')), 202
+    except AddonUpdateBusy as error:
+        return jsonify(error=str(error)), 409
+
+
+@app.route('/api/addon-updates/apply', methods=['POST'])
+def apply_addon_updates():
+    if server_process_active():
+        return jsonify(error='Stop Minecraft and wait for shutdown before applying add-on updates.'), 409
+    try:
+        return jsonify(addon_updates.start('apply')), 202
+    except AddonUpdateBusy as error:
+        return jsonify(error=str(error)), 409
+
+
+def addon_update_scheduler(stop_event, interval=3600):
+    """Opt-in hourly checks while stopped; imports/tests never start a worker."""
+    next_check = 0
+    next_cleanup = 0
+    while not stop_event.is_set():
+        now = time.monotonic()
+        try:
+            # Private rollback retention is independent of automatic installation.
+            if now >= next_cleanup:
+                if addon_updates.cleanup_backups() is not None:
+                    next_cleanup = now + 3600
+            if (now >= next_check and addon_updates.snapshot()['enabled']
+                    and not server_process_active()):
+                addon_updates.start('apply')
+                next_check = now + interval
+        except AddonUpdateBusy:
+            pass
+        except Exception:
+            app.logger.exception('Unable to schedule add-on updates')
+            next_check = now + interval
+            next_cleanup = now + 3600
+        stop_event.wait(60)
 
 @app.route('/properties', methods=['GET', 'POST'])
 def properties():
@@ -1854,6 +1965,7 @@ def purge_server():
         return jsonify(error='Unable to clear player history. Check data permissions and disk space, then retry purge.'), 500
             
     # Wipe core server files
+    addon_updates.reset()
     for filename in os.listdir(SERVER_DIR):
         file_path = os.path.join(SERVER_DIR, filename)
         try:
@@ -1948,6 +2060,7 @@ def import_server():
         return jsonify(error=str(error)), 409
 
     # Wipe current server files only after shutdown and log activity are complete.
+    addon_updates.reset()
     for filename in os.listdir(SERVER_DIR):
         file_path = os.path.join(SERVER_DIR, filename)
         try:
@@ -2038,12 +2151,7 @@ def api_stats():
         
         # State Parsing
         log_path = os.path.join(SERVER_DIR, "console.log")
-        is_done = False
-        if os.path.exists(log_path):
-            with open(log_path, "r") as f:
-                content = f.read()
-                if "Done (" in content or "For help, type" in content:
-                    is_done = True
+        is_done = startup_log_status.ready(log_path, MINECRAFT_PROCESS.pid)
         
         if target_state == "Shutting Down":
             status = "Shutting Down"
@@ -2079,10 +2187,7 @@ def get_console():
     log_path = os.path.join(SERVER_DIR, "console.log")
     try:
         if os.path.exists(log_path):
-            # Read the last 100 lines of the log file so we don't overload the browser
-            with open(log_path, "r", encoding='utf-8', errors='replace') as f:
-                lines = f.readlines()
-                return "".join(lines[-100:])
+            return read_tail(log_path)
         else:
             return "Server is offline or initializing. Waiting for log output..."
     except Exception as e:
@@ -2187,6 +2292,9 @@ if __name__ == '__main__':
     automation_thread = threading.Thread(target=server_automation.run, args=(automation_stop,),
                                          name='minecraft-automation', daemon=True)
     automation_thread.start()
+    updates_thread = threading.Thread(target=addon_update_scheduler, args=(automation_stop,),
+                                      name='addon-update-scheduler', daemon=True)
+    updates_thread.start()
     # Start backup scheduler thread
     import threading
     scheduler_thread = threading.Thread(target=backup_scheduler, daemon=True)

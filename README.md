@@ -16,8 +16,8 @@ its `/data` volume.
   lists and automatic Java selection.
 - **Server controls:** Start, stop, restart, optional startup/crash recovery,
   console command history, logs, players and server properties.
-- **Plugins:** Upload/delete Paper and Purpur plugins, upload plugin data files,
-  and edit/search text configs.
+- **Files and addons:** Full browser file manager, Paper/Purpur Plugins and
+  Forge/Fabric Mods tabs, searchable configs and opt-in Modrinth updates.
 - **Backups:** Manual and scheduled ZIP backups, optional shutdown during backup,
   downloads, manual-backup renaming, restores and imports.
 - **Accounts:** Owner protection, administrator/custom permissions and separate
@@ -53,13 +53,13 @@ CPU and memory readings describe the server process. TPS is not currently measur
 | **General** | Server name and server icon |
 | **Runtime** | Java, timezone and automatic startup/crash recovery |
 | **Backups** | Schedule, retention and shutdown during backup |
-| **Addons** | Public BlueMap integration |
+| **Addons** | Public BlueMap and opt-in plugin/mod updates |
 | **Appearance** | Theme, accent, favicon and background |
 | **Email** | SMTP delivery and invitation settings |
 | **Operations** | Backup, import and owner-only purge/reset |
 
-Use **Save Settings** or **Apply Changes** to save changes. SMTP has its own save
-button. Changing settings does not automatically restart Minecraft.
+Use **Save Settings** or **Apply Changes** to save changes. SMTP and automatic
+addon updates have separate save buttons. Settings do not restart Minecraft.
 
 **Server icon:** Upload a PNG, JPEG or WebP in General (up to 5 MiB and 16 million
 pixels). The panel fits it into a 64×64 PNG for the login screen, sidebar server
@@ -75,9 +75,12 @@ If auto-start remains enabled, a later container restart starts Minecraft again.
 Import, restore and purge disable both options. These settings do not restart
 Docker or detect a hung process.
 
-### Plugins and config files
+### Plugins, mods and config files
 
-The **Plugins** tab is available on **Paper and Purpur**.
+The tab is **Plugins** on **Paper/Purpur**, **Mods** on **Forge/Fabric**, and hidden
+on Vanilla. Each engine uses its own folder; switching engines does not convert
+plugins into mods. Stop Minecraft before changing mods. Loader descriptors are
+checked on upload, but you must still select a compatible server-side build.
 
 1. Upload plugin JARs (up to **64 MiB**), then restart Minecraft to generate configs.
 2. Open a plugin folder to upload presets, exports or other non-JAR files (up to
@@ -93,6 +96,67 @@ Root-folder non-JAR uploads are limited to supported text configs up to 1 MiB.
 Deleting a plugin JAR keeps its config folders. Previous files are saved under
 `/data/plugin-config-backups` before config saves, replacements and JAR deletions.
 Stop Minecraft before replacing files in use; restart after changing plugin JARs.
+Mod recovery copies use `/data/mod-config-backups`. Open **Files → config** for
+Forge/Fabric configs outside the mods folder.
+
+### Browser file manager
+
+Open **Files** to browse/download all files under `/data/server`, upload files
+(up to **256 MiB** each), create folders/text files, rename/move items, delete
+items and edit/search UTF-8 text (up to **1 MiB**). Uploads target the open folder.
+Reverse proxies may impose a smaller upload limit. Archives are not extracted.
+
+All changes require Minecraft to be fully stopped and no backup or other
+server-file operation in progress. Traversal, links and special files are
+rejected. Replacing/editing a file first saves a recovery copy; deletion moves
+items into private trash. Recover manually from `/data/file-manager-backups` or
+`/data/file-manager-trash` using each entry's metadata and `content`. Recovery
+copies are not auto-pruned; monitor disk space and keep full backups.
+
+Grant **files.view** and **files.manage** separately in Panel Users. Read access
+can reveal plugin secrets; write access can replace executable JARs. Panel
+accounts and SMTP credentials outside the server folder are not exposed.
+Browser transfers only: FTP/SFTP support is deferred.
+
+### Automatic addon updates
+
+In **Settings → Addons**, click **Check updates**, approve identified projects,
+enable automatic updates and click **Save update settings**. Checks run hourly
+while stopped; **Apply approved updates now** checks and installs immediately
+if Minecraft is stopped. The updater never stops, starts or hot-reloads it.
+
+Currently **Modrinth only**: exact installed JAR hashes establish project identity.
+Only newer stable releases explicitly matching the Minecraft version/engine are
+eligible, with dedicated-server support required for mods. Downloads must come
+directly from Modrinth's CDN and match the published size and SHA-512 checksum.
+Unidentified/ambiguous files and unverified required dependencies are skipped.
+Dependencies are not installed automatically. Checks are limited to 64 JARs,
+128 MiB per JAR. Console update links are not trusted download sources.
+
+Take a full server backup first: compatibility metadata and checksums cannot
+guarantee plugin behavior or safety. Previous JARs are retained in
+`/data/addon-update-backups` for manual recovery, **not** worlds/configs/databases.
+These copies stay outside the plugins/mods folders. Cleanup keeps at most the
+**2 newest completed update batches**, expires copies after **7 days**, and runs
+after update jobs and hourly even when updates are disabled. Failed, interrupted,
+legacy or unrecognized backups are preserved for manual review; Settings → Addons
+shows cleanup results and warnings. Active JARs and other backups are untouched.
+An installation failure attempts rollback and disables automation for review.
+Purge/import/restore clear approvals and disable updates. Hangar integration is
+deferred; update Hangar-only plugins manually.
+
+### Performance
+
+Console tails and startup detection use bounded log reads instead of repeatedly
+loading entire logs. Properties shares the panel's status poll; startup archives
+old console logs in chunks. These reduce panel I/O and transient memory use.
+
+The RAM gauge reports process RSS, not live Java heap usage; a high idle reading
+alone does not prove a leak. Profile before changing memory or GC settings.
+Paper's [spark profiling guide](https://docs.papermc.io/paper/profiling/) and
+[troubleshooting guide](https://docs.papermc.io/paper/basic-troubleshooting/) cover
+performance diagnosis. No blanket JVM flags, forced GC or automatic engine
+patches are applied.
 
 ### Backups, imports and resets
 

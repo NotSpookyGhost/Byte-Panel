@@ -23,8 +23,10 @@ PERMISSIONS = {
     'players.view': 'View players, IP addresses and history',
     'players.manage': 'Kick, ban and unban players',
     'properties.manage': 'Edit server properties',
-    'plugins.view': 'Browse and download plugins and their configs',
-    'plugins.manage': 'Upload/delete executable plugins and edit configs (powerful)',
+    'plugins.view': 'Browse and download plugins/mods and their configs',
+    'plugins.manage': 'Upload/delete executable plugins/mods and edit configs (powerful)',
+    'files.view': 'Browse and download all server files (may contain secrets)',
+    'files.manage': 'Upload, edit, move and delete all server files (powerful)',
     'backups.create': 'Create and manage backups (download, rename and delete)',
     'backups.restore': 'Restore backups and replace server data (powerful)',
     'settings.manage': 'Edit panel, runtime and SMTP settings (powerful)',
@@ -36,6 +38,7 @@ OWNER_PERMISSIONS = {'server.purge'}
 DEPENDENCIES = {
     'console.command': 'console.view', 'logs.clear': 'logs.view',
     'players.manage': 'players.view', 'plugins.manage': 'plugins.view',
+    'files.manage': 'files.view',
 }
 
 

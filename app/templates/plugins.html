@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Plugins - Byte Panel</title>
+    <title>{{ addon_title }} - Byte Panel</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='plugins.css', v=app_version) }}">
     <link rel="icon" href="{{ '/branding-assets/favicon.ico' if has_custom.favicon else url_for('static', filename='bytedev_logo.png') }}">
@@ -13,39 +13,42 @@
     {% include 'panel_ui.html' %}
 </head>
 <body class="theme-{{ config.theme }} obsidian page-plugins plugins-page" data-accent="{{ config.get('accent', 'lime') }}" data-restricted="{{ 'true' if current_user is defined and current_user and current_user.must_change_password else 'false' }}">
-    {% set page_title = 'Plugins' %}
+    {% set page_title = addon_title %}
     {% include 'panel_sidebar.html' %}
-<main class="main-layout" id="plugin-manager" data-csrf-token="{{ plugin_csrf_token }}">
+<main class="main-layout" id="plugin-manager" data-csrf-token="{{ plugin_csrf_token }}" data-addon-kind="{{ addon_kind }}" data-root-name="{{ root_name }}">
         {% set page_actions %}{% if can is not defined or can('console.view') %}<a href="/console" class="btn btn-outline">Open console</a>{% endif %}{% endset %}
 {% include 'panel_header.html' %}
         <div class="main-content" id="panel-content" tabindex="-1">
             <section class="card plugins-upload" aria-labelledby="upload-title">
-                <h2 id="upload-title">Plugins &amp; files</h2>
-                <p>Browse configs and upload files to the folder you have open. Plugin JARs always go in plugins/.</p>
+                <h2 id="upload-title">{{ addon_title }} &amp; files</h2>
+                <p>Browse configs and upload files to the folder you have open. {{ addon_kind | capitalize }} JARs always go in {{ root_name }}/.</p>
+                {% if addon_kind == 'mod' %}
+                <p>Use server-compatible {{ config.server_type }} mods for your Minecraft version and install their required dependencies. This panel checks the loader descriptor, not full compatibility. Mod configs are usually in <code>config/</code>, outside <code>mods/</code>.{% if can is defined and can('files.view') %} <a href="/files?path=config">Open mod configs in Files</a>.{% endif %}</p>
+                {% endif %}
                 <form data-permission="plugins.manage" id="plugin-upload-form">
-                    <label for="plugin-upload">Choose plugin JARs, configs or data files</label>
+                    <label for="plugin-upload">Choose {{ addon_kind }} JARs, configs or data files</label>
                     <div class="plugins-upload-controls">
                         <input class="plugin-interactive" id="plugin-upload" type="file" multiple required
                             aria-describedby="plugin-upload-destination plugin-upload-help">
                         <button class="btn btn-primary plugin-interactive" type="submit" id="upload-button">Upload files</button>
                     </div>
-                    <p id="plugin-upload-destination" class="plugins-editor-path" role="status" aria-live="polite">Data/config destination: plugins/ (open a plugin subfolder for data files).</p>
+                    <p id="plugin-upload-destination" class="plugins-editor-path" role="status" aria-live="polite">Data/config destination: {{ root_name }}/ (open a {{ addon_kind }} subfolder for data files).</p>
                     <details class="plugin-upload-help"><summary>File limits, safety &amp; import guidance</summary>
-                    <p>Upload plugin JARs to the plugins folder, then start or restart your server to generate their config folders.</p>
-                    <p>Open a plugin folder below to upload presets, compressed exports or other data files into it. Files are stored unchanged, not extracted or imported automatically.</p>
-                    <p>Stop the server before editing configs, replacing files in use or deleting plugins. Restart for JAR changes; follow each plugin's instructions for config reloads and data imports. Deleting a JAR keeps its config folders and saves a recoverable backup.</p>
-                    <p id="plugin-upload-help" class="plugins-hint">JARs always go in the root plugins folder (64 MiB max). Non-JAR files go in the folder you have open: up to 64 MiB in subfolders, or supported text configs up to 1 MiB in the root. The text editor remains limited to 1 MiB.</p>
-                    <p class="plugins-hint">LuckPerms: open <code>plugins/LuckPerms</code> and upload your exported <code>preset.json.gz</code>. Then, with the server running, use <code>lp import preset.json.gz</code> in the console to merge it. Uploading alone does not change permissions.</p></details>
+                    <p>Upload {{ addon_kind }} JARs to the {{ root_name }} folder, then start or restart your server to generate their configs.</p>
+                    <p>Open a {{ addon_kind }} folder below to upload presets, compressed exports or other data files into it. Files are stored unchanged, not extracted or imported automatically.</p>
+                    <p>Stop the server before editing configs, replacing files in use or deleting {{ root_name }}. Restart for JAR changes; follow each {{ addon_kind }}'s instructions for config reloads and data imports. Deleting a JAR keeps its config folders and saves a recoverable backup.</p>
+                    <p id="plugin-upload-help" class="plugins-hint">JARs always go in the root {{ root_name }} folder (64 MiB max). Non-JAR files go in the folder you have open: up to 64 MiB in subfolders, or supported text configs up to 1 MiB in the root. The text editor remains limited to 1 MiB.</p>
+                    {% if addon_kind == 'plugin' %}<p class="plugins-hint">LuckPerms: open <code>plugins/LuckPerms</code> and upload your exported <code>preset.json.gz</code>. Then, with the server running, use <code>lp import preset.json.gz</code> in the console to merge it. Uploading alone does not change permissions.</p>{% endif %}</details>
                 </form>
             </section>
             <div id="plugins-message" class="plugins-message" role="status" aria-live="polite" hidden></div>
             <div class="plugins-workspace">
-                <section class="card plugins-browser" aria-label="Plugin files">
+                <section class="card plugins-browser" aria-label="{{ addon_kind | capitalize }} files">
                     <div class="plugins-toolbar">
                         <h2>Files</h2>
                         <button type="button" id="refresh-files" class="btn btn-outline plugin-interactive">Refresh</button>
                     </div>
-                    <nav id="plugin-breadcrumbs" class="plugins-breadcrumbs" aria-label="Plugin folder"></nav>
+                    <nav id="plugin-breadcrumbs" class="plugins-breadcrumbs" aria-label="{{ addon_kind | capitalize }} folder"></nav>
                     <p id="plugin-list-status" class="plugins-hint">Loading files...</p>
                     <div class="plugins-table-scroll">
                         <table class="plugins-file-table">
@@ -76,12 +79,12 @@
                     </div>
                     <label for="plugin-content" class="plugins-hint">File contents</label>
                     <textarea id="plugin-content" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" disabled
-                        placeholder="Open a plugin folder and select a .yml, .json, .properties or other text config."></textarea>
+                        placeholder="Open a {{ addon_kind }} folder and select a .yml, .json, .properties or other text config."></textarea>
                     <div class="plugins-editor-actions">
                         <button id="reload-config" class="btn btn-outline" type="button" disabled>Reload file</button>
                         <button data-permission="plugins.manage" id="save-config" class="btn btn-primary" type="button" disabled>Save changes</button>
                     </div>
-                    <p class="plugins-hint">Previous versions are saved in <code>/data/plugin-config-backups</code>. Configs are saved as plain text; check their syntax before restarting.</p>
+                    <p class="plugins-hint">Previous versions are saved in <code>/data/{{ addon_kind }}-config-backups</code>. Configs are saved as plain text; check their syntax before restarting.</p>
                 </section>
             </div>
         </div>

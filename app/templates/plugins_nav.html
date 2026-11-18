@@ -1,3 +1,4 @@
-{% if (config.server_type or '') | lower in ['paper', 'purpur'] and (can is not defined or can('plugins.view')) %}
-<a href="{{ url_for('plugins.page') }}" class="nav-link{% if request.endpoint == 'plugins.page' %} active{% endif %}">Plugins</a>
+{% set is_modded = (config.server_type or '') | lower in ['forge', 'fabric'] %}
+{% if (config.server_type or '') | lower in ['paper', 'purpur', 'forge', 'fabric'] and (can is not defined or can('plugins.view')) %}
+<a href="{{ '/mods' if is_modded else '/plugins' }}" class="nav-link{% if request.endpoint == 'plugins.page' %} active{% endif %}">{{ 'Mods' if is_modded else 'Plugins' }}</a>
 {% endif %}

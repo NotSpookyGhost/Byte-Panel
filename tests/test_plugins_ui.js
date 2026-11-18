@@ -8,10 +8,14 @@ const PluginConfigSearch = require('../app/static/plugin_search.js');
 const source = fs.readFileSync(path.join(__dirname, '../app/static/plugins.js'), 'utf8');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-async function setup({manage = true, confirm = true, failDelete = false, uploadResponses = [], failedFolder = null} = {}) {
+async function setup({manage = true, confirm = true, failDelete = false, uploadResponses = [], failedFolder = null, addonKind = 'plugin'} = {}) {
     const document = createDocument();
     const manager = document.getElementById('plugin-manager');
     manager.dataset.csrfToken = 'plugin-csrf-test';
+    if (addonKind === 'mod') {
+        manager.dataset.addonKind = 'mod';
+        manager.dataset.rootName = 'mods';
+    }
     const ids = ['plugin-content', 'plugin-file-list', 'plugins-message', 'editor-state', 'save-config', 'reload-config',
         'config-search', 'search-previous', 'search-next', 'search-match-case', 'search-status', 'plugin-breadcrumbs',
         'plugin-list-status', 'editor-path', 'refresh-files', 'plugin-upload-form', 'plugin-upload', 'plugin-upload-destination'];
@@ -47,7 +51,7 @@ async function setup({manage = true, confirm = true, failDelete = false, uploadR
             data = {path: 'Demo.JAR', name: 'Demo.JAR', revision: 'jar-revision'};
         } else if (url === '/api/plugins/delete' && options.method === 'DELETE') {
             if (failDelete) { status = 409; data = {error: 'This JAR changed. Confirm again.'}; }
-            else { removed = true; data = {message: 'Plugin JAR deleted. Configs kept.', backup: 'safe-Demo.JAR.bak'}; }
+            else { removed = true; data = {message: (addonKind === 'mod' ? 'Mod' : 'Plugin') + ' JAR deleted. Configs kept.', backup: 'safe-Demo.JAR.bak'}; }
         } else if (url === '/api/plugins/upload' && options.method === 'POST') {
             const response = uploadResponses.shift() || {status: 201, data: {message: 'Uploaded'}};
             status = response.status;
@@ -183,5 +187,32 @@ async function setup({manage = true, confirm = true, failDelete = false, uploadR
     assert.match(partial.document.getElementById('plugins-message').textContent, /1 file\(s\) uploaded/);
     assert.match(partial.document.getElementById('plugins-message').textContent, /too-large.dat: File is too large/);
     assert.equal(partial.document.getElementById('plugins-message').dataset.error, 'true');
-    console.log('Plugin UI checks passed (folder navigation, data upload destinations, JAR routing, replacement confirmation, permissions, partial failures, search, and deletion).');
+    const mods = await setup({addonKind: 'mod'});
+    assert.equal(mods.document.getElementById('plugin-breadcrumbs').children[0].textContent, 'mods');
+    assert.equal(mods.row('Demo.JAR').children[0].children[1].textContent, 'Mod JAR');
+    assert.match(mods.document.getElementById('plugin-upload-destination').textContent, /mods\//);
+    mods.row('config.yml').children[0].children[0].click();
+    await settle();
+    assert.equal(mods.document.getElementById('editor-path').textContent, 'mods/config.yml');
+    mods.deleteButton().click();
+    await settle();
+    assert.match(mods.confirmations[0], /Delete mods\/Demo.JAR/);
+    assert.match(mods.confirmations[0], /unload the mod/);
+    assert.match(mods.document.getElementById('plugins-message').textContent, /\/data\/mod-config-backups\//);
+
+    const modUpload = await setup({addonKind: 'mod', uploadResponses: [
+        {status: 409, data: {error: 'Already exists', conflict: true, revision: 'mod-revision'}}
+    ]});
+    modUpload.document.getElementById('plugin-upload').files = [{name: 'Demo.JAR'}];
+    modUpload.document.getElementById('plugin-upload-form').fire('submit');
+    await settle();
+    const modWrites = modUpload.calls.filter(call => call.url === '/api/plugins/upload');
+    assert.equal(modWrites.length, 2);
+    assert.equal(modWrites[1].options.body.get('path'), '');
+    assert.equal(modWrites[1].options.body.get('replace_revision'), 'mod-revision');
+    assert.match(modUpload.confirmations[0], /Replace mods\/Demo.JAR/);
+    assert.match(modUpload.document.getElementById('plugins-message').textContent, /Mod JARs require a restart/);
+    const modViewer = await setup({addonKind: 'mod', manage: false});
+    assert.equal(modViewer.row('Demo.JAR').children[2].children.length, 0);
+    console.log('Plugin/mod UI checks passed (dynamic roots and labels, folder navigation, data uploads, JAR routing, replacement confirmation, permissions, partial failures, search, and deletion).');
 })().catch(error => { console.error(error); process.exitCode = 1; });

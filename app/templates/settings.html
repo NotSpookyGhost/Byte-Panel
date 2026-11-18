@@ -15,6 +15,8 @@
     {% include 'panel_access.html' %}
     {% include 'panel_ui.html' %}
     <script src="{{ url_for('static', filename='settings_ui.js', v=app_version) }}" defer></script>
+    <script src="{{ url_for('static', filename='addon_updates.js', v=app_version) }}" defer></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='addon_updates.css', v=app_version) }}">
     <script src="{{ url_for('static', filename='backup_progress.js', v=app_version) }}" defer></script>
 </head>
 <body class="theme-{{ config.theme }} obsidian page-settings " data-accent="{{ config.get('accent', 'lime') }}" data-restricted="{{ 'true' if current_user is defined and current_user and current_user.must_change_password else 'false' }}">
@@ -26,7 +28,7 @@
         <main class="main-layout">
         {% include 'panel_header.html' %}
         <div class="main-content" id="panel-content" tabindex="-1">
-            <p class="settings-intro">Configure your server, addons, appearance and notifications. Changes are saved together, except SMTP which has its own Save button.</p>
+            <p class="settings-intro">Configure your server, addons, appearance and notifications. SMTP and automatic addon updates each have their own Save button; other changes are saved together.</p>
             {% if settings_error %}<p class="accounts-message" role="alert">{{ settings_error }}</p>{% endif %}
             {% if request.method == 'POST' and not settings_error %}<p class="accounts-message" role="status">{{ settings_message or 'Settings saved.' }}</p>{% endif %}
             <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
@@ -179,6 +181,25 @@
                             <input type="number" id="bluemapPort" name="bluemap_port" min="1024" max="65535" value="{{ config.get('bluemap_port', 8100) }}" required aria-describedby="bluemapHelp">
                             <p class="field-help" id="bluemapHelp">Install the compatible BlueMap plugin/mod and enable its webserver in this Minecraft container. Match its port here (default 8100; panel port 5000 cannot be used). The panel connects internally to 127.0.0.1, so no extra Docker port or Cloudflare hostname is needed. Save changes, then open your panel URL with /map.</p>
                             {% if config.get('bluemap_enabled') %}<a href="/map/" class="btn btn-outline" target="_blank" rel="noopener">Open map</a>{% endif %}
+                        </div>
+                        <div class="addon-update-settings" id="addon-update-settings">
+                            <h3>Automatic plugin / mod updates</h3>
+                            <p class="field-help">Opt-in updates from Modrinth, checked hourly while Minecraft is stopped. First check your installed JARs, approve individual projects, enable automatic updates, then use <strong>Save update settings</strong> below. These settings are separate from the main form.</p>
+                            <p class="field-help">Only hash-identified projects with a newer stable release for your exact Minecraft version and engine are eligible. Unknown files, ambiguous builds and unverified required dependencies are skipped. Console update links are never used as download sources. Hangar is not supported yet.</p>
+                            <p class="field-help">Updates execute third-party code when Minecraft next starts. Metadata and checksums cannot guarantee compatibility or safety. Make a full server backup first. The panel saves previous JARs in <code>/data/addon-update-backups</code> for manual recovery, not a backup of worlds, configs or plugin databases. It never stops or starts Minecraft for an update.</p>
+                            <p class="field-help">Rollback copies stay outside the plugins/mods folders. The panel keeps at most the 2 newest completed update batches and removes copies older than 7 days. Cleanup runs after update jobs and hourly, even with automatic updates disabled. Failed, interrupted, legacy or unrecognized backups are kept for manual review; other backups and active JARs are not affected.</p>
+                            <label class="addon-update-approval"><input type="checkbox" id="addon-updates-enabled" disabled> Enable automatic updates for approved projects</label>
+                            <p id="addon-updates-message" class="accounts-message" role="status">Loading update settings...</p>
+                            <p id="addon-updates-checked" class="field-help"></p>
+                            <p id="addon-updates-backup-cleanup" class="field-help" role="status" hidden></p>
+                            <div id="addon-updates-backup-warnings" class="field-help" role="status" hidden></div>
+                            <div id="addon-updates-rows" aria-label="Installed add-on update approvals"></div>
+                            <p id="addon-updates-unsaved" class="field-help" hidden>Unsaved update settings. Save them before checking or applying updates.</p>
+                            <div class="addon-update-actions">
+                                <button type="button" id="addon-updates-save" class="btn btn-primary" disabled>Save update settings</button>
+                                <button type="button" id="addon-updates-check" class="btn btn-outline" disabled>Check updates</button>
+                                <button type="button" id="addon-updates-apply" class="btn btn-outline" disabled>Apply approved updates now</button>
+                            </div>
                         </div>
                     </section>
 

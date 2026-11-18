@@ -7,6 +7,7 @@ No Minecraft process or real email is started.
 import argparse
 import base64
 from contextlib import closing
+import io
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import threading
 from unittest.mock import patch
+import zipfile
 
 from flask import abort, request
 from werkzeug.serving import make_server, WSGIRequestHandler
@@ -81,7 +83,7 @@ def main():
 
         @app.before_request
         def prevent_operational_writes():
-            if request.method not in ('GET', 'HEAD', 'OPTIONS') and request.path not in ('/login', '/settings', '/api/backup/rename') and not request.path.startswith('/api/plugins/'):
+            if request.method not in ('GET', 'HEAD', 'OPTIONS') and request.path not in ('/login', '/settings', '/api/backup/rename') and not request.path.startswith(('/api/plugins/', '/api/files/')):
                 abort(418)
 
         server = make_server('127.0.0.1', 0, app, threaded=True, request_handler=QuietHandler)
@@ -99,6 +101,39 @@ def main():
             context = browser.new_context(viewport={'width':1440, 'height':1000}, reduced_motion='reduce')
             page = context.new_page()
             page.on('pageerror', lambda error: errors.append(str(error)))
+            # Every updater request is intercepted: browser QA never contacts
+            # Modrinth, downloads a JAR, or starts a real update worker.
+            update_state = dict(enabled=False, projects=[], addons=[], status='idle', busy=False,
+                                message='Updates are disabled.', last_checked=None, last_applied=None)
+            update_phase = {'value': None}
+            update_requests = []
+            update_filename = 'QA <svg onload=window.qaAddonXss=1>.jar'
+            def mock_addon_updates(route):
+                req = route.request
+                update_requests.append((req.method, req.url))
+                if req.method == 'PUT':
+                    values = req.post_data_json
+                    update_state.update(enabled=values['enabled'], projects=values['projects'],
+                                        message='Mock update preferences saved.')
+                elif req.method == 'POST' and req.url.endswith('/check'):
+                    update_state.update(status='checking', busy=True, message='Mock check in progress.')
+                    update_phase['value'] = 'check'
+                elif req.method == 'POST' and req.url.endswith('/apply'):
+                    update_state.update(status='applying', busy=True, message='Mock update in progress.')
+                    update_phase['value'] = 'apply'
+                elif req.method == 'GET' and update_phase['value']:
+                    phase = update_phase['value']
+                    update_phase['value'] = None
+                    update_state.update(status='complete', busy=False, last_checked='2026-11-18T10:00:00Z',
+                                        message='Mock check complete.' if phase == 'check' else 'Mock update completed.')
+                    update_state['addons'] = [dict(filename=update_filename, project_id='qa-project',
+                        installed_version='1.0' if phase == 'check' else '2.0', available_version='2.0',
+                        status='update_available' if phase == 'check' else 'updated',
+                        reason='Verified project. Literal <img src=x onerror=window.qaAddonXss=1> text.')]
+                    if phase == 'apply':
+                        update_state['last_applied'] = '2026-11-18T10:01:00Z'
+                route.fulfill(status=200, content_type='application/json', body=json.dumps(update_state))
+            page.route('**/api/addon-updates**', mock_addon_updates)
             page.goto(base + '/login')
             check(page.locator('#panel-sidebar').count() == 0, 'Login has no sidebar')
             check(page.locator('.login-card .login-server-identity h1').inner_text() == 'Obsidian Realm', 'Login heading uses server name')
@@ -168,7 +203,7 @@ def main():
             check(command_input.input_value() == draft, 'Page reload clears private command history')
             check(len(submitted_commands) == 6, 'Arrow navigation never submits a command after refresh')
             page.unroute('**/api/command', capture_command)
-            paths = ['overview','console','logs','players','plugins','properties','backups','settings','users','account']
+            paths = ['overview','console','logs','players','plugins','files','properties','backups','settings','users','account']
             for width, height in [(1440,1000),(900,900),(390,844)]:
                 page.set_viewport_size({'width':width,'height':height})
                 widths[width] = {}
@@ -432,6 +467,40 @@ def main():
             check(not page.evaluate('document.documentElement.scrollWidth > innerWidth'), 'Addons settings fit mobile')
             page.screenshot(path=str(artifacts / 'addons-settings-mobile.png'))
             page.set_viewport_size({'width':1440,'height':1000})
+            # Mocked-only updater workflow: identify, explicitly approve, opt in,
+            # save, apply, then poll completion without touching installed JARs.
+            check(not page.locator('#addon-updates-enabled').is_checked(), 'Automatic add-on updates default off')
+            page.wait_for_function("!document.getElementById('addon-updates-check').disabled")
+            with page.expect_response('**/api/addon-updates/check'):
+                page.locator('#addon-updates-check').click()
+            page.wait_for_function("document.querySelector('#addon-updates-rows input[data-project=qa-project]') !== null")
+            check(page.locator('#addon-updates-rows strong').inner_text() == update_filename,
+                  'Updater renders untrusted filenames as literal text')
+            check(page.locator('#addon-updates-rows svg, #addon-updates-rows img').count() == 0,
+                  'Updater filenames and descriptions cannot inject markup')
+            check(page.evaluate('window.qaAddonXss === undefined'), 'Updater metadata cannot execute scripts')
+            approval = page.locator('#addon-updates-rows input[data-project="qa-project"]')
+            check(not approval.is_checked(), 'Verified project still requires explicit approval')
+            approval.check()
+            page.locator('#addon-updates-enabled').check()
+            check(page.locator('#addon-updates-check').is_disabled() and page.locator('#addon-updates-apply').is_disabled(),
+                  'Unsaved updater choices block check and apply')
+            with page.expect_response(lambda response: response.url.endswith('/api/addon-updates') and response.request.method == 'PUT'):
+                page.locator('#addon-updates-save').click()
+            page.wait_for_function("!document.getElementById('addon-updates-apply').disabled")
+            check(update_state['enabled'] and update_state['projects'] == ['qa-project'], 'Updater saves only the approved project')
+            with page.expect_response('**/api/addon-updates/apply'):
+                page.locator('#addon-updates-apply').click()
+            page.wait_for_function("document.getElementById('addon-updates-message').textContent === 'Mock update completed.'")
+            check(any(method == 'POST' and url.endswith('/apply') for method, url in update_requests),
+                  'Updater apply uses the mocked worker endpoint')
+            check('2.0' in page.locator('#addon-updates-rows').inner_text(), 'Updater polling displays completed version')
+            for width, height in ((1440, 1000), (390, 844)):
+                page.set_viewport_size({'width': width, 'height': height})
+                check(not page.evaluate('document.documentElement.scrollWidth > innerWidth'), f'Updater controls fit at {width}')
+                page.locator('#addon-updates-apply').scroll_into_view_if_needed()
+                page.screenshot(path=str(artifacts / f'addon-updates-{width}.png'))
+            page.set_viewport_size({'width':1440,'height':1000})
             # Exercise all Settings sections and persist every accent using the real form.
             for accent in ('lime','yellow','blue'):
                 page.goto(base + '/settings')
@@ -540,6 +609,148 @@ def main():
             page.wait_for_function("document.getElementById('plugins-message').textContent.includes('1 file(s) uploaded')")
             check((plugin / 'preset.json.gz').read_bytes() == b'isolated-qa-data', 'Subfolder data upload')
             page.screenshot(path=str(artifacts / 'plugin-editor.png'))
+            # Files operations use only a disposable subfolder. Never operate on
+            # Minecraft runtime files or the real data volume during browser QA.
+            page.goto(base + '/files')
+            check(page.locator('nav a[href="/files"]').count() == 1, 'Files appears in the owner navigation')
+            page.once('dialog', lambda dialog: dialog.accept('qa-files'))
+            with page.expect_response('**/api/files/mkdir') as response:
+                page.locator('#files-new-folder').click()
+            check(response.value.ok, 'New folder request succeeds')
+            qa_folder = fixture.root / 'qa-files'
+            page.get_by_role('button', name='qa-files', exact=True).wait_for()
+            check(qa_folder.is_dir(), 'New folder created in disposable server root')
+            check(page.locator('#files-list tr[data-path="qa-files"] .folder-icon').count() == 1,
+                  'File browser labels folders with a folder icon')
+            page.get_by_role('button', name='qa-files', exact=True).click()
+            page.wait_for_url('**/files?path=qa-files')
+            page.once('dialog', lambda dialog: dialog.accept('notes.txt'))
+            with page.expect_response('**/api/files/create') as response:
+                page.locator('#files-new-file').click()
+            check(response.value.ok, 'New text file request succeeds')
+            page.get_by_role('button', name='notes.txt', exact=True).click()
+            page.locator('#files-content').wait_for(state='visible')
+            page.wait_for_function("!document.getElementById('files-content').disabled")
+            file_content = 'temporary: true\n' * 160 + 'search-target: preserved\n'
+            page.locator('#files-content').fill(file_content)
+            with page.expect_response(lambda response: response.url.endswith('/api/files/file') and response.request.method == 'PUT') as response:
+                page.locator('#files-save').click()
+            check(response.value.ok, 'File editor saves through the real API')
+            page.wait_for_function("document.getElementById('files-editor-state').textContent === 'Saved'")
+            check((qa_folder / 'notes.txt').read_text(encoding='utf-8') == file_content,
+                  'Text editing changes only the disposable file')
+            page.locator('#files-search').fill('search-target')
+            page.locator('#files-search-next').click()
+            check('1 of 1' in page.locator('#files-search-status').inner_text(), 'Files editor searches long text')
+            for width, height in ((1440, 1000), (390, 844)):
+                page.set_viewport_size({'width': width, 'height': height})
+                check(not page.evaluate('document.documentElement.scrollWidth > innerWidth'),
+                      f'Files editor fits at {width}')
+                page.locator('section[aria-label="File editor"]').screenshot(path=str(artifacts / f'files-editor-{width}.png'))
+            page.set_viewport_size({'width':1440,'height':1000})
+            page.locator('#files-content').fill('unsaved: true\n')
+            page.once('dialog', lambda dialog: dialog.dismiss())
+            page.locator('#files-close').click()
+            check(page.locator('#files-content').input_value() == 'unsaved: true\n',
+                  'Files dirty-close confirmation can cancel')
+            page.once('dialog', lambda dialog: dialog.accept())
+            page.locator('#files-close').click()
+            check(page.locator('#files-content').is_disabled(), 'Files close resets the editor')
+            uploaded_content = b'{"preset":"disposable QA data"}\n'
+            page.locator('#files-upload').set_input_files({
+                'name':'preset.json', 'mimeType':'application/json', 'buffer':uploaded_content})
+            with page.expect_response('**/api/files/upload') as response:
+                page.locator('#files-upload-button').click()
+            check(response.value.ok, 'Files upload succeeds')
+            page.wait_for_function("document.getElementById('files-message').textContent.includes('1 file(s) uploaded')")
+            check((qa_folder / 'preset.json').read_bytes() == uploaded_content, 'Upload uses the open subfolder')
+            page.locator('#files-filter').fill('preset')
+            check(page.locator('#files-list tr').count() == 1, 'Files filename filter narrows the current directory')
+            page.locator('#files-filter').fill('')
+            page.once('dialog', lambda dialog: dialog.accept('qa-files/renamed notes.txt'))
+            with page.expect_response('**/api/files/move') as response:
+                page.locator('#files-list tr[data-path="qa-files/notes.txt"]').get_by_role('button', name='Rename / move', exact=True).click()
+            check(response.value.ok, 'Files rename succeeds')
+            page.locator('#files-list tr[data-path="qa-files/renamed notes.txt"]').wait_for()
+            check(not (qa_folder / 'notes.txt').exists(), 'Rename removes the old disposable path')
+            check((qa_folder / 'renamed notes.txt').read_text(encoding='utf-8') == file_content,
+                  'Rename preserves the file contents')
+            page.once('dialog', lambda dialog: dialog.accept('wrong-path'))
+            page.locator('#files-list tr[data-path="qa-files/preset.json"]').get_by_role('button', name='Delete', exact=True).click()
+            page.wait_for_function("document.getElementById('files-message').textContent.includes('Nothing was deleted')")
+            check((qa_folder / 'preset.json').exists(), 'Incorrect deletion confirmation preserves the file')
+            page.once('dialog', lambda dialog: dialog.accept('qa-files/preset.json'))
+            with page.expect_response(lambda response: response.url.endswith('/api/files/entry') and response.request.method == 'DELETE') as response:
+                page.locator('#files-list tr[data-path="qa-files/preset.json"]').get_by_role('button', name='Delete', exact=True).click()
+            deleted = response.value.json()
+            check(response.value.ok and not (qa_folder / 'preset.json').exists(), 'Confirmed file deletion succeeds')
+            check((fixture.data / 'file-manager-trash' / deleted['recovery_id'] / 'content').read_bytes() == uploaded_content,
+                  'Deleted file remains recoverable outside the server folder')
+            page.locator('#files-breadcrumbs').get_by_role('button', name='server/', exact=True).click()
+            page.wait_for_url('**/files')
+            page.once('dialog', lambda dialog: dialog.accept('qa-files'))
+            with page.expect_response(lambda response: response.url.endswith('/api/files/entry') and response.request.method == 'DELETE') as response:
+                page.locator('#files-list tr[data-path="qa-files"]').get_by_role('button', name='Delete', exact=True).click()
+            deleted_folder = response.value.json()
+            check(response.value.ok and not qa_folder.exists(), 'Confirmed folder deletion succeeds')
+            recovered_folder = fixture.data / 'file-manager-trash' / deleted_folder['recovery_id'] / 'content'
+            check((recovered_folder / 'renamed notes.txt').read_text(encoding='utf-8') == file_content,
+                  'Deleted folder contents remain recoverable')
+
+            # Modded engines reuse the permission-gated add-on tools but never
+            # display or write the Paper/Purpur plugins folder.
+            saved_engine_config = fixture.module.load_config()
+            mod_config = fixture.root / 'config'
+            mod_config.mkdir(exist_ok=True)
+            (mod_config / 'qa-mod.toml').write_text('qa = true\n', encoding='utf-8')
+            try:
+                for engine, descriptor, metadata in (
+                        ('Forge', 'META-INF/mods.toml', 'modLoader="javafml"\n'),
+                        ('Fabric', 'fabric.mod.json', '{"schemaVersion":1,"id":"qa","version":"1"}')):
+                    fixture.module.save_config({**saved_engine_config, 'server_type': engine})
+                    page.goto(base + '/mods')
+                    check(page.title() == 'Mods - Byte Panel', engine + ' page uses the Mods title')
+                    check(page.locator('nav a[href="/mods"]').inner_text() == 'Mods', engine + ' navigation uses Mods')
+                    check(page.locator('nav a[href="/plugins"]').count() == 0, engine + ' hides Plugins navigation')
+                    check(page.locator('#plugin-manager').get_attribute('data-root-name') == 'mods', engine + ' manager uses mods root')
+                    check(page.get_by_role('button', name='LuckPerms', exact=True).count() == 0,
+                          engine + ' does not display plugin folders')
+                    jar = io.BytesIO()
+                    with zipfile.ZipFile(jar, 'w') as archive:
+                        archive.writestr(descriptor, metadata)
+                    jar_name = 'qa-' + engine.lower() + '.jar'
+                    page.locator('#plugin-upload').set_input_files({
+                        'name':jar_name, 'mimeType':'application/java-archive', 'buffer':jar.getvalue()})
+                    with page.expect_response('**/api/plugins/upload') as response:
+                        page.locator('#upload-button').click()
+                    check(response.value.ok, engine + ' accepts its own mod descriptor')
+                    page.get_by_role('button', name='Delete ' + jar_name, exact=True).wait_for()
+                    check((fixture.root / 'mods' / jar_name).read_bytes() == jar.getvalue(), engine + ' JAR stored in mods only')
+                    check(not (fixture.root / 'plugins' / jar_name).exists(), engine + ' never writes plugin JAR path')
+                    for width, height in ((1440, 1000), (390, 844)):
+                        page.set_viewport_size({'width': width, 'height': height})
+                        check(not page.evaluate('document.documentElement.scrollWidth > innerWidth'), engine + f' Mods fits at {width}')
+                        page.screenshot(path=str(artifacts / f'mods-{engine.lower()}-{width}.png'))
+                        page.locator('.plugins-browser').screenshot(path=str(artifacts / f'mods-{engine.lower()}-files-{width}.png'))
+                    page.set_viewport_size({'width':1440,'height':1000})
+                    page.get_by_role('link', name='Open mod configs in Files', exact=True).click()
+                    page.wait_for_url('**/files?path=config')
+                    page.get_by_role('button', name='qa-mod.toml', exact=True).wait_for()
+                    check(page.locator('#files-breadcrumbs').inner_text().endswith('config'), engine + ' config link opens separate config folder')
+                    page.goto(base + '/mods')
+                    page.once('dialog', lambda dialog: dialog.accept())
+                    with page.expect_response(lambda response: response.url.endswith('/api/plugins/delete') and response.request.method == 'DELETE') as response:
+                        page.get_by_role('button', name='Delete ' + jar_name, exact=True).click()
+                    deleted_mod = response.value.json()
+                    check(response.value.ok and not (fixture.root / 'mods' / jar_name).exists(), engine + ' mod deletion succeeds')
+                    check((fixture.data / 'mod-config-backups' / deleted_mod['backup']).read_bytes() == jar.getvalue(),
+                          engine + ' deleted mod has a separate recovery backup')
+                    check((mod_config / 'qa-mod.toml').read_text(encoding='utf-8') == 'qa = true\n', engine + ' deletion preserves mod configs')
+            finally:
+                fixture.module.save_config(saved_engine_config)
+            page.goto(base + '/plugins')
+            check(page.get_by_role('button', name='LuckPerms', exact=True).count() == 1,
+                  'Restoring Purpur shows the unchanged plugin directory')
             # First-run pages remain standalone; only the disposable fixture is reset.
             fixture.config.update(is_setup=False, welcome_seen=False)
             fixture.module.save_config(fixture.config)

@@ -1,6 +1,9 @@
 (() => {
     'use strict';
     const manager = document.getElementById('plugin-manager');
+    const addonKind = manager.dataset.addonKind === 'mod' ? 'mod' : 'plugin';
+    const addonLabel = addonKind === 'mod' ? 'Mod' : 'Plugin';
+    const rootName = manager.dataset.rootName === 'mods' ? 'mods' : 'plugins';
     const editor = document.getElementById('plugin-content');
     const list = document.getElementById('plugin-file-list');
     const notice = document.getElementById('plugins-message');
@@ -82,7 +85,7 @@
         const breadcrumbs = document.getElementById('plugin-breadcrumbs');
         breadcrumbs.replaceChildren();
         const parts = folder ? folder.split('/') : [];
-        ['plugins', ...parts].forEach((label, index) => {
+        [rootName, ...parts].forEach((label, index) => {
             if (index) breadcrumbs.append(document.createTextNode(' / '));
             const button = document.createElement('button');
             button.type = 'button';
@@ -97,13 +100,13 @@
         const result = await api('/api/plugins/files?path=' + encodeURIComponent(path));
         folder = result.path;
         renderBreadcrumbs();
-        document.getElementById('plugin-upload-destination').textContent = 'Data/config destination: plugins/'
-            + (folder ? folder + '/' : ' (open a plugin subfolder for data files).');
+        document.getElementById('plugin-upload-destination').textContent = 'Data/config destination: ' + rootName + '/'
+            + (folder ? folder + '/' : ' (open a ' + addonKind + ' subfolder for data files).');
         list.replaceChildren();
         document.getElementById('plugin-list-status').textContent = result.entries.length
             ? result.entries.length + ' items. Select a folder or config to open it.'
             : folder ? 'This folder is empty. Upload config or data files here.'
-                : 'This folder is empty. Upload a plugin, then restart the server to generate its folders.';
+                : 'This folder is empty. Upload a ' + addonKind + ', then restart the server to generate its configs.';
         result.entries.forEach(entry => {
             const row = document.createElement('tr');
             row.dataset.path = entry.path;
@@ -130,11 +133,11 @@
                 if (entry.kind === 'folder') navigate(entry.path);
                 else if (entry.editable) openFile(entry.path);
                 else message(entry.name + ' (' + sizeLabel(entry.size) + ') cannot be edited here.'
-                    + (entry.name.toLowerCase().endsWith('.jar') ? ' Stop the server before deleting a plugin.' : ' Use Download to view it locally.'));
+                    + (entry.name.toLowerCase().endsWith('.jar') ? ' Stop the server before deleting a ' + addonKind + '.' : ' Use Download to view it locally.'));
             });
             const kind = document.createElement('span');
             kind.className = 'file-kind';
-            kind.textContent = entry.kind === 'folder' ? 'Folder' : entry.name.toLowerCase().endsWith('.jar') ? 'Plugin JAR' : entry.editable ? 'Text config' : 'Data file (download only)';
+            kind.textContent = entry.kind === 'folder' ? 'Folder' : entry.name.toLowerCase().endsWith('.jar') ? addonLabel + ' JAR' : entry.editable ? 'Text config' : 'Data file (download only)';
             nameCell.append(name, kind);
             const size = document.createElement('td');
             size.textContent = entry.kind === 'folder' ? '\u2014' : sizeLabel(entry.size);
@@ -164,14 +167,14 @@
     function deletePlugin(path) {
         run(async () => {
             const preview = await api('/api/plugins/delete?path=' + encodeURIComponent(path));
-            if (!window.confirm('Delete plugins/' + preview.path + '?\n\nStop the server first. '
+            if (!window.confirm('Delete ' + rootName + '/' + preview.path + '?\n\nStop the server first. '
                 + 'Only this JAR will be removed; config folders will be kept. '
-                + 'A recoverable backup will be saved. Restart afterward to unload the plugin.')) return;
+                + 'A recoverable backup will be saved. Restart afterward to unload the ' + addonKind + '.')) return;
             const result = await api('/api/plugins/delete', {
                 method: 'DELETE', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ path: preview.path, revision: preview.revision }),
             });
-            message(result.message + '\nBackup: /data/plugin-config-backups/' + result.backup);
+            message(result.message + '\nBackup: /data/' + addonKind + '-config-backups/' + result.backup);
             await loadFolder(folder);
         });
     }
@@ -187,7 +190,7 @@
         editor.value = result.content;
         original = editor.value;
         search.refresh();
-        document.getElementById('editor-path').textContent = 'plugins/' + selected;
+        document.getElementById('editor-path').textContent = rootName + '/' + selected;
     }
     function openFile(path) {
         if (busy || !confirmDiscard()) return;
@@ -249,7 +252,7 @@
                     catch (error) {
                         if (error.status !== 409 || !error.data.conflict) throw error;
                         const target = data.get('path');
-                        if (!window.confirm('Replace plugins/' + (target ? target + '/' : '') + file.name
+                        if (!window.confirm('Replace ' + rootName + '/' + (target ? target + '/' : '') + file.name
                                 + '? Stop the server before replacing files in use. A backup of the existing file will be kept.')) {
                             failures.push(file.name + ': skipped (existing file kept).');
                             continue;
@@ -262,7 +265,7 @@
             }
             input.value = '';
             await loadFolder(destination);
-            message(uploaded + ' file(s) uploaded. Plugin JARs require a restart. For config/data files, follow the plugin import/reload instructions; uploads do not import data automatically.'
+            message(uploaded + ' file(s) uploaded. ' + addonLabel + ' JARs require a restart. For config/data files, follow the ' + addonKind + ' import/reload instructions; uploads do not import data automatically.'
                 + (failures.length ? '\n' + failures.join('\n') : ''), failures.length > 0);
         });
     });

@@ -24,6 +24,8 @@ ROUTE_PERMISSIONS = {
     'moderate_player': 'players.manage', 'properties': 'properties.manage',
     'start_server': 'server.control', 'stop_server': 'server.control', 'server_action': 'server.control',
     'settings': 'settings.manage', 'purge_server': 'server.purge', 'import_server': 'server.import',
+    'addon_update_settings': 'settings.manage', 'check_addon_updates': 'settings.manage',
+    'apply_addon_updates': 'settings.manage',
     'backups_page': ('backups.create', 'backups.restore'),
     'api_list_backups': ('backups.create', 'backups.restore'),
     'api_download_backup': 'backups.create', 'api_delete_backup': 'backups.create',
@@ -33,6 +35,10 @@ ROUTE_PERMISSIONS = {
     'plugins.page': 'plugins.view', 'plugins.list_files': 'plugins.view',
     'plugins.config_file': 'plugins.view', 'plugins.upload': 'plugins.manage',
     'plugins.download': 'plugins.view', 'plugins.delete_plugin': 'plugins.manage',
+    'files.page': 'files.view', 'files.list_files': 'files.view',
+    'files.file': 'files.view', 'files.entry_details': 'files.view', 'files.download': 'files.view',
+    'files.upload': 'files.manage', 'files.mkdir': 'files.manage',
+    'files.create': 'files.manage', 'files.move': 'files.manage',
     'accounts.users_page': 'users.manage', 'accounts.users_api': 'users.manage',
     'accounts.user_api': 'users.manage', 'accounts.smtp_api': 'settings.manage',
     'accounts.test_smtp': 'settings.manage', 'accounts.my_account': None,
@@ -140,6 +146,8 @@ class PanelSecurity:
         needed = ROUTE_PERMISSIONS[endpoint]
         if endpoint == 'plugins.config_file' and request.method == 'PUT':
             needed = 'plugins.manage'
+        if (endpoint == 'files.file' and request.method == 'PUT') or (endpoint == 'files.entry_details' and request.method == 'DELETE'):
+            needed = 'files.manage'
         if endpoint == 'import_server' and 'import_backup_path' in request.form:
             needed = 'backups.restore'
         if endpoint == 'purge_server' and g.panel_user['role'] != 'owner':
