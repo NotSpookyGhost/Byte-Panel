@@ -34,6 +34,31 @@ class QuietHandler(WSGIRequestHandler):
         pass
 
 
+def check_setup_build_progress(page, base, check):
+    def mock_setup(route):
+        if route.request.method == 'POST':
+            route.fulfill(json={'status': 'started'})
+        else:
+            route.continue_()
+
+    page.route(base + '/api/bootstrap', lambda route: route.fulfill(json={'status': 'success'}))
+    page.route(base + '/setup', mock_setup)
+    page.route(base + '/api/setup/progress', lambda route: route.fulfill(json={
+        'status': 'running', 'percent': 60, 'msg': 'Building Server Files'}))
+    page.get_by_label('Panel Administrator Password').fill('Setup-test-password1!')
+    page.get_by_role('button', name='Proceed', exact=True).click()
+    page.get_by_role('button', name='Create New Server', exact=True).click()
+    page.get_by_label('Server Name', exact=True).fill('Setup Progress QA')
+    page.get_by_role('button', name='Create Server', exact=True).click()
+    page.wait_for_function("document.getElementById('progress-percent').innerText === '60%'")
+    check(page.locator('#stage-4').is_visible(), 'Setup displays install progress')
+    fill = page.locator('#progress-fill')
+    check(fill.evaluate('(el) => el.style.width') == '60%', 'Setup fill tracks the worker percentage')
+    accent = page.locator('.stage-btn-primary').first.evaluate('(el) => getComputedStyle(el).backgroundColor')
+    check(fill.evaluate('(el) => getComputedStyle(el).backgroundColor') == accent,
+          'Setup fill retains the visible accent color after submitting server creation')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--artifacts', default=str(Path(tempfile.gettempdir()) / 'byte-panel-obsidian-qa'))
@@ -770,6 +795,7 @@ def main():
                 check(first_run.locator('#panel-sidebar').count() == 0, 'Setup stays standalone')
                 check(first_run.locator('form').count() > 0, 'Setup form retained')
                 first_run.screenshot(path=str(artifacts / 'setup-mobile.png'))
+                check_setup_build_progress(first_run, base, check)
             public.close()
             check(not errors, 'Browser JavaScript errors: ' + repr(errors))
             browser.close()
