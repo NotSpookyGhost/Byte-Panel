@@ -32,7 +32,9 @@
         notice.textContent = text;
     }
     function updateControls() {
-        manager.querySelectorAll('.plugin-interactive').forEach(control => { control.disabled = busy; });
+        manager.querySelectorAll('.plugin-interactive').forEach(control => {
+            control.disabled = busy || Boolean(window.panelCan && control.dataset.permission && !window.panelCan(control.dataset.permission));
+        });
         editor.disabled = busy || selected === null;
         editor.readOnly = Boolean(window.panelCan && !window.panelCan('plugins.manage'));
         saveButton.disabled = busy || selected === null || !dirty() || editor.readOnly;
@@ -185,8 +187,7 @@
         if (busy || !confirmDiscard()) return;
         run(async () => { await loadFolder(path); resetEditor(); });
     }
-    async function loadFile(path) {
-        const result = await api('/api/plugins/file?path=' + encodeURIComponent(path));
+    function showFile(result) {
         selected = result.path;
         revision = result.revision;
         lineEnding = result.content.includes('\r\n') ? '\r\n' : '\n';
@@ -210,13 +211,35 @@
         if (busy || !confirmDiscard()) return;
         let loaded = false;
         run(async () => {
-            await loadFile(path);
+            showFile(await api('/api/plugins/file?path=' + encodeURIComponent(path)));
             loaded = true;
             notice.hidden = true;
-            const editorPanel = document.querySelector('.plugins-editor');
-            if (editorPanel && window.matchMedia('(max-width: 1199px)').matches) editorPanel.scrollIntoView({block:'start', behavior:'auto'});
-        }).then(() => { if (loaded && selected === path) resetPosition(true); });
+        }).then(() => { if (loaded && selected === path) focusEditor(); });
     }
+    function focusEditor() {
+        const editorPanel = document.querySelector('.plugins-editor');
+        if (editorPanel && window.matchMedia('(max-width: 1199px)').matches) editorPanel.scrollIntoView({block:'start', behavior:'auto'});
+        resetPosition(true);
+    }
+    document.getElementById('plugin-new-file').addEventListener('click', () => {
+        if (window.panelCan && !window.panelCan('plugins.manage')) return;
+        let opened = false;
+        run(async () => {
+            const name = window.prompt('New config filename (for example settings.yml) in ' + rootName + '/' + folder);
+            if (!name) return;
+            const result = await api('/api/plugins/create', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: folder, name }),
+            });
+            if (!dirty()) {
+                showFile({ ...result, content: '' });
+                opened = true;
+            }
+            message(result.message);
+            try { await loadFolder(folder); }
+            catch { message(result.message + ' Refresh the file list to see it.', true); }
+        }).then(() => { if (opened) focusEditor(); });
+    });
     const backToFiles = document.getElementById('back-to-files');
     if (backToFiles) backToFiles.addEventListener('click', () => {
         if (busy || !confirmDiscard()) return;

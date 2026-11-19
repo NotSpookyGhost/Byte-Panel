@@ -87,6 +87,9 @@ checked on upload, but you must still select a compatible server-side build.
    **64 MiB**). The upload form shows the destination.
 3. Open supported text configs (up to **1 MiB**), use **Find in config** or
    Ctrl/Cmd+F, edit and save.
+4. Select **New config file** in Plugins/Mods or **New text file** in Files
+   to create a blank file in the current folder. The editor opens it automatically
+   if you have no unsaved edits.
 
 Both config editors use syntax colors for common config formats and open/reload
 files at the top. Highlighting is local to your browser, does not change the

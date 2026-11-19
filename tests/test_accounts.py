@@ -997,6 +997,24 @@ class AccountIntegrationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.json)
         self.assertFalse(target.exists())
 
+    def test_plugin_file_creation_requires_management_and_both_csrf_tokens(self):
+        directory = self.root / 'plugins' / 'LuckPerms'
+        directory.mkdir(parents=True)
+        payload = {'path': 'LuckPerms', 'name': 'messages.yml'}
+        reader = self.client_for(self.create('reader', ['plugins.view']))
+        self.assertEqual(reader.post('/api/plugins/create', json=payload,
+                                     headers=self.headers(reader)).status_code, 403)
+        manager = self.client_for(self.create('manager', ['plugins.manage']))
+        headers = self.headers(manager)
+        for missing in ('X-Panel-CSRF', 'X-Plugin-CSRF-Token'):
+            without = {key: value for key, value in headers.items() if key != missing}
+            self.assertEqual(manager.post('/api/plugins/create', json=payload,
+                                          headers=without).status_code, 403)
+        self.assertFalse((directory / 'messages.yml').exists())
+        result = manager.post('/api/plugins/create', json=payload, headers=headers)
+        self.assertEqual(result.status_code, 201, result.json)
+        self.assertEqual((directory / 'messages.yml').read_bytes(), b'')
+
     def test_plugin_data_upload_requires_management_and_both_csrf_tokens(self):
         directory = self.root / 'plugins' / 'LuckPerms'
         directory.mkdir(parents=True)

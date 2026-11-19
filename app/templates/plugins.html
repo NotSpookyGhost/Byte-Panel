@@ -46,9 +46,12 @@
             <div id="plugins-message" class="plugins-message" role="status" aria-live="polite" hidden></div>
             <div class="plugins-workspace">
                 <section class="card plugins-browser" aria-label="{{ addon_kind | capitalize }} files">
-                    <div class="plugins-toolbar">
+                    <div class="plugins-toolbar plugins-browser-toolbar">
                         <h2>Files</h2>
-                        <button type="button" id="refresh-files" class="btn btn-outline plugin-interactive">Refresh</button>
+                        <div>
+                            <button type="button" id="plugin-new-file" class="btn btn-outline plugin-interactive" data-permission="plugins.manage">New config file</button>
+                            <button type="button" id="refresh-files" class="btn btn-outline plugin-interactive">Refresh</button>
+                        </div>
                     </div>
                     <nav id="plugin-breadcrumbs" class="plugins-breadcrumbs" aria-label="{{ addon_kind | capitalize }} folder"></nav>
                     <p id="plugin-list-status" class="plugins-hint">Loading files...</p>

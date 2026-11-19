@@ -14,6 +14,8 @@ import zlib
 from flask import Blueprint, abort, g, jsonify, render_template, request, send_file, session
 from werkzeug.exceptions import HTTPException
 
+from server_files import _directory, _name, _parts
+
 
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 MAX_CONFIG_BYTES = 1024 * 1024
@@ -46,7 +48,7 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
                 return MAX_UPLOAD_BYTES + 1024 * 1024
             if self.path == '/api/plugins/file':
                 return 8 * MAX_CONFIG_BYTES  # JSON escaping can expand text.
-            if self.path == '/api/plugins/delete':
+            if self.path in ('/api/plugins/delete', '/api/plugins/create'):
                 return 32 * 1024
             return super().max_content_length
 
@@ -206,6 +208,31 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
             ))
         entries.sort(key=lambda entry: (entry['kind'] != 'folder', entry['name'].lower()))
         return jsonify(path=relative, entries=entries)
+
+    @plugins.route('/api/plugins/create', methods=['POST'])
+    def create_config():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            abort(400, description='Provide the new config filename and its folder.')
+        name = _name(payload.get('name'))
+        folder = payload.get('path', '')
+        parts = _parts(folder)
+        if name.startswith('.'):
+            abort(400, description='Enter a filename that does not start with a dot.')
+        if Path(name).suffix.lower() not in TEXT_EXTENSIONS:
+            abort(415, description='Choose a supported config extension such as .yml, .json, .toml, or .txt.')
+        with _WRITE_LOCK:
+            if not checked_path(folder).is_dir():
+                abort(400, description='Select a folder for the new config.')
+            with _directory(server_root, (g.addon_root_name, *parts)) as parent:
+                try:
+                    # Exclusive creation prevents overwriting an existing entry.
+                    with parent.create(name, mode=0o644):
+                        pass
+                except FileExistsError:
+                    abort(409, description='A file or folder already uses that name.')
+        return jsonify(path='/'.join((*parts, name)), revision=hashlib.sha256(b'').hexdigest(),
+                       message='Config file created.'), 201
 
     @plugins.route('/api/plugins/file', methods=['GET', 'PUT'])
     def config_file():

@@ -33,7 +33,7 @@
     async function run(action) {
         if (busy) return;
         busy = true; controls();
-        try { await action(); }
+        try { return await action(); }
         catch (error) { message(error.message || 'Unable to complete this file operation.', true); }
         finally { busy = false; controls(); }
     }
@@ -134,14 +134,16 @@
         editor.scrollLeft = 0;
         if (syntax) syntax.syncScroll();
     }
-    async function openFile(path) {
-        if (!discard()) return;
-        const data = await api('/api/files/file?path=' + encodeURIComponent(path));
+    function showFile(data) {
         selected = data.path; lineEnding = data.content.includes('\r\n') ? '\r\n' : '\n';
         editor.value = data.content; original = editor.value; revision = data.revision;
         if (syntax) syntax.setFile(selected);
         resetPosition();
         byId('files-editor-path').textContent = 'server/' + selected; search.refresh(); controls();
+    }
+    async function openFile(path) {
+        if (!discard()) return;
+        showFile(await api('/api/files/file?path=' + encodeURIComponent(path)));
     }
     function recovery(data) {
         return data.recovery_id ? ' Recovery copy: /data/file-manager-' + (data.recovery_kind === 'trash' ? 'trash' : 'backups') + '/' + data.recovery_id : '';
@@ -150,8 +152,18 @@
         if (!canManage) return;
         const name = window.prompt(kind === 'mkdir' ? 'New folder name:' : 'New text filename (for example notes.txt):');
         if (!name) return;
-        const data = await api('/api/files/' + kind, json('POST', {path: folder, name, ...(kind === 'create' ? {content: ''} : {})}));
-        await loadFolder(); message(data.message);
+        const data = await api('/api/files/' + kind, json('POST', {path: folder, name}));
+        const newFile = kind === 'create';
+        const openNewFile = newFile && !dirty();
+        if (newFile) {
+            byId('files-filter').value = '';
+            if (openNewFile) showFile({...data, content: ''});
+        }
+        const created = newFile ? 'File created.' : data.message;
+        message(created);
+        try { await loadFolder(); }
+        catch { message(created + ' Refresh the file list to see it.', true); }
+        return openNewFile;
     }
     function affectsSelected(path) { return selected !== null && (selected === path || selected.startsWith(path + '/')); }
     async function moveEntry(entry) {
@@ -207,7 +219,9 @@
     }
     byId('files-upload-form').addEventListener('submit', event => { event.preventDefault(); run(upload); });
     byId('files-new-folder').addEventListener('click', () => run(() => createEntry('mkdir')));
-    byId('files-new-file').addEventListener('click', () => run(() => createEntry('create')));
+    byId('files-new-file').addEventListener('click', () => {
+        run(() => createEntry('create')).then(opened => { if (opened) editor.focus(); });
+    });
     byId('files-refresh').addEventListener('click', () => run(() => loadFolder()));
     byId('files-filter').addEventListener('input', render);
     byId('files-content').addEventListener('input', controls);

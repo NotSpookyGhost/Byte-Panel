@@ -59,7 +59,7 @@ def main():
         @app.before_request
         def prevent_operational_writes():
             if request.method not in ('GET', 'HEAD', 'OPTIONS') and request.path not in (
-                    '/login', '/api/plugins/file', '/api/files/file'):
+                    '/login', '/api/plugins/file', '/api/files/file', '/api/plugins/create', '/api/files/create'):
                 abort(418)
 
         server = make_server('127.0.0.1', 0, app, threaded=True, request_handler=QuietHandler)
@@ -101,6 +101,31 @@ def main():
 
                 def at_top():
                     return editor.evaluate('(el) => el.selectionStart === 0 && el.selectionEnd === 0 && el.scrollTop === 0 && el.scrollLeft === 0')
+
+                create_id = '#plugin-new-file' if plugin else '#files-new-file'
+                create_endpoint = '/api/' + kind + '/create'
+
+                def create_file(name):
+                    page.once('dialog', lambda dialog: dialog.accept(name))
+                    with page.expect_response(lambda response: response.url.endswith(create_endpoint)) as created:
+                        page.locator(create_id).click()
+                    check(created.value.status == 201, kind + ': create request succeeds')
+                    page.wait_for_function('(id) => !document.querySelector(id).disabled', arg=editor_id)
+                    check(page.locator(list_id).get_by_role('button', name=name, exact=True).count() == 1,
+                          kind + ': new file appears in the current folder')
+
+                create_file('fresh.yml')
+                check((root / 'fresh.yml').read_bytes() == b'', kind + ': created an empty config in the current folder')
+                check(editor.input_value() == '' and at_top(), kind + ': fresh config opens at the top')
+                check(wrapper.get_attribute('data-language') == 'yaml', kind + ': new config uses syntax highlighting')
+                editor.fill('enabled: true\n')
+                create_file('extra.yml')
+                check(editor.input_value() == 'enabled: true\n', kind + ': creation preserves unsaved edits')
+                with page.expect_response(lambda response: response.url.endswith(endpoint) and response.request.method == 'PUT') as saved:
+                    page.locator(save_id).click()
+                check(saved.value.status == 200 and (root / 'fresh.yml').read_bytes() == b'enabled: true\n',
+                      kind + ': edits save to the new file')
+                page.wait_for_function('(id) => !document.querySelector(id).disabled', arg=editor_id)
 
                 open_file('config.yml')
                 check(at_top(), kind + ': long config opens at the beginning')

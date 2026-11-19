@@ -555,6 +555,38 @@ class PluginManagerTests(unittest.TestCase):
         self.assertFalse(self.guard_active)
         self.assertEqual(self.guard_entries, 3)
 
+    def test_create_config_uses_the_active_root_and_never_overwrites(self):
+        for engine, root_name in (('Paper', 'plugins'), ('Forge', 'mods')):
+            with self.subTest(engine=engine):
+                self.config['server_type'] = engine
+                root = self.server / root_name
+                result = self.client.post('/api/plugins/create', json={'name': 'config.yml'}, headers=self.headers)
+                self.assertEqual(result.status_code, 201, result.json)
+                opened = self.client.get('/api/plugins/file?path=config.yml')
+                self.assertEqual(opened.json['revision'], result.json['revision'])
+                self.assertEqual(opened.json['content'], '')
+                (root / 'config.yml').write_bytes(b'enabled: true')
+                duplicate = self.client.post('/api/plugins/create', json={'name': 'config.yml'}, headers=self.headers)
+                self.assertEqual(duplicate.status_code, 409, duplicate.json)
+                self.assertEqual((root / 'config.yml').read_bytes(), b'enabled: true')
+
+    def test_create_config_rejects_invalid_names_folders_and_busy_operations(self):
+        for values, status in (
+            ({'name': '../escape.yml'}, 400),
+            ({'name': 'another/name.yml'}, 400),
+            ({'name': '.hidden.yml'}, 400),
+            ({'name': 'addon.jar'}, 415),
+            ({'path': '../mods', 'name': 'config.yml'}, 400),
+            ({'path': 'missing', 'name': 'config.yml'}, 404),
+        ):
+            with self.subTest(values=values):
+                result = self.client.post('/api/plugins/create', json=values, headers=self.headers)
+                self.assertEqual(result.status_code, status, result.json)
+        self.guard_busy = True
+        blocked = self.client.post('/api/plugins/create', json={'name': 'config.yml'}, headers=self.headers)
+        self.assertEqual(blocked.status_code, 409, blocked.json)
+        self.assertEqual(list(self.root.iterdir()), [])
+
     def test_busy_mutation_guard_blocks_every_write_and_releases_after_errors(self):
         target = self.config_file()
         self.upload(self.jar())

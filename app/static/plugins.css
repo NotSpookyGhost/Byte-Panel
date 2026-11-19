@@ -21,6 +21,7 @@
 .plugins-workspace .card { padding: 20px; min-width: 0; }
 .plugins-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .plugins-toolbar h2 { margin: 0; font-size: 1.1rem; }
+.plugins-browser-toolbar, .plugins-browser-toolbar > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .plugins-breadcrumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-top: 16px; overflow-wrap: anywhere; }
 .plugins-breadcrumbs button { background: none; border: none; padding: 4px; color: var(--accent); cursor: pointer; font: inherit; overflow-wrap: anywhere; }
 .plugins-breadcrumbs button:disabled { color: var(--text-muted); cursor: default; }
