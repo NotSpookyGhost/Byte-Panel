@@ -6,6 +6,8 @@ import java.net.URI;
 import java.nio.file.*;
 import java.time.Clock;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -41,6 +43,20 @@ class DurableStateTest {
         assertEquals(state.get("initialization_id"), marker.get("initialization_id"));
         assertTrue(new DurableState(config(directory, "test-scope")).ready());
     }
+    @Test void gameplayModeReadsDoNotWaitForJournalMonitor() throws Exception {
+        Protocol.Config config = config(directory, "test-scope");
+        DurableState state = new DurableState(config);
+        JsonObject snapshot = new GuardEngineTest.FakeBridge(config).snapshot;
+        snapshot.addProperty("mode", "monitor");
+        state.installSnapshot(snapshot);
+        CompletableFuture<String> read = new CompletableFuture<>();
+        synchronized (state) {
+            new Thread(() -> read.complete(state.mode())).start();
+            assertEquals("monitor", read.get(2, TimeUnit.SECONDS));
+        }
+        assertEquals("monitor", new DurableState(config).mode());
+    }
+
     @Test void missingStateAfterOutageEnrollmentCannotRestartEvenWithHealthyBridge() throws Exception {
         Protocol.Config config = config(directory, "test-scope");
         GuardEngineTest.FakeBridge bridge = new GuardEngineTest.FakeBridge(config);

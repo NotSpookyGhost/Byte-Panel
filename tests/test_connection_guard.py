@@ -246,6 +246,14 @@ class GuardTests(unittest.TestCase):
         self.guard.heartbeat(dict(self.guard.config(), ready=True, auth_ready=False))
         self.assertEqual('deny', self.guard.prelogin(self.request())['action'])
 
+    def test_expired_heartbeat_no_longer_reports_ready(self):
+        self.guard.heartbeat(dict(self.guard.config(), ready=True, auth_ready=True, status='ready'))
+        self.assertTrue(self.guard.snapshot()['bridge']['healthy'])
+        self.now += 46
+        health = self.guard.snapshot()['bridge']
+        self.assertFalse(health['healthy'])
+        self.assertEqual(health['status'], 'Heartbeat expired')
+
     def test_heartbeat_health_requires_ready_and_offline_auth(self):
         self.offline()
         self.guard.heartbeat(dict(self.guard.config(), ready=True, auth_ready=False,

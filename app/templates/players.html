@@ -240,9 +240,10 @@
                     {% endfor %}
                 </tbody>
             </table></div>
-            <section id="cg-player-security" class="card connection-guard" data-permission="players.view" aria-labelledby="cg-events-title">
+            {% from 'byte_guard_brand.html' import guard_mark with context %}
+            <section id="cg-player-security" class="card connection-guard" data-permission="players.view" aria-labelledby="cg-events-title" tabindex="-1">
                 <div class="cg-heading">
-                    <div><h2 id="cg-events-title">Byte Guard</h2><p class="field-help">Attempted logins are separate from online players. An allowed check does not mean the player joined or authenticated successfully.</p></div>
+                    <div><h2 id="cg-events-title">{{ guard_mark(config.get('theme'), 'logo') }}</h2><p class="field-help">Attempted logins are separate from online players. An allowed check does not mean the player joined or authenticated successfully.</p></div>
                     <span id="cg-review-count" class="cg-badge" role="status"></span>
                 </div>
                 <p id="cg-events-message" class="cg-message" role="status">Loading connection history...</p>

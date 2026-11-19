@@ -138,7 +138,7 @@ class ConnectionGuard:
             ''')
             if self._meta(conn, 'policy_revision') is None:
                 for key, value in dict(policy_revision=1, mode='off', radius_km=250,
-                                       identity_mode=self._effective_mode(), scope=str(self.scope_provider())).items():
+                                       identity_mode=self._inactive_identity_mode(), scope=str(self.scope_provider())).items():
                     self._setmeta(conn, key, value)
             self._ensure_scope(conn)
             initialization_id = self._meta(conn, 'initialization_id')
@@ -155,6 +155,14 @@ class ConnectionGuard:
             return config['identity_mode']
         value = config.get('online-mode', config.get('online_mode', True))
         return 'offline' if value is False or str(value).lower() == 'false' else 'online'
+
+    def _inactive_identity_mode(self):
+        try:
+            return self._effective_mode()
+        except (ValueError, OSError):
+            # Keep the panel available to fix unreadable properties. Activation
+            # and Guard-enabled starts still require strict identity validation.
+            return 'online'
 
     @staticmethod
     def _meta(conn, key, default=None):
@@ -173,7 +181,7 @@ class ConnectionGuard:
         for table in ('identities', 'attempts', 'reservations', 'approvals', 'audit', 'inflight'):
             conn.execute('DELETE FROM ' + table)
         for key, value in dict(scope=scope, policy_revision=self._meta(conn, 'policy_revision', 0) + 1,
-                               mode='off', identity_mode=self._effective_mode(), history_imported=False).items():
+                               mode='off', identity_mode=self._inactive_identity_mode(), history_imported=False).items():
             self._setmeta(conn, key, value)
         self._heartbeat = {}
 
@@ -242,7 +250,7 @@ class ConnectionGuard:
         if mode is not None and mode not in ('off', 'monitor', 'enforce'):
             raise ValueError('Choose Off, Monitor or Enforce.')
         if radius is not None and (isinstance(radius, bool) or not isinstance(radius, (float, int))
-                                  or not math.isfinite(radius) or not 1 <= radius <= 20000):
+                                  or not 1 <= radius <= 20000):
             raise ValueError('Radius must be between 1 and 20,000 km.')
         requested_identity = payload.get('identity_mode')
         if requested_identity is not None and requested_identity not in ('online', 'offline'):
@@ -294,9 +302,14 @@ class ConnectionGuard:
             policy = self._policy(conn)
             count = conn.execute("SELECT COUNT(*) FROM attempts WHERE review='pending'").fetchone()[0]
             heartbeat = dict(self._heartbeat)
-            heartbeat['healthy'] = bool(heartbeat.get('ready') and self._clock() - heartbeat.get('received_at', 0) < 45
-                                        and heartbeat.get('policy_revision') == policy['policy_revision']
+            current = heartbeat.get('policy_revision') == policy['policy_revision']
+            fresh = self._clock() - heartbeat.get('received_at', 0) < 45
+            heartbeat['healthy'] = bool(heartbeat.get('ready') and fresh and current
                                         and (policy['identity_mode'] != 'offline' or heartbeat.get('auth_ready')))
+            if heartbeat.get('received_at') is not None and not fresh:
+                heartbeat['status'] = 'Heartbeat expired'
+            elif heartbeat.get('received_at') is not None and not current:
+                heartbeat.update(status='Waiting for current policy', pending_revision=True)
             return dict(**policy, protocol_version=1, **self.geoip.credentials(),
                         geoip=self.geoip.health(), bridge=heartbeat, pending_reviews=count,
                         history_imported=self._meta(conn, 'history_imported', False))
@@ -614,6 +627,8 @@ class ConnectionGuard:
             limit, cursor = min(200, max(1, int(limit))), int(cursor) if cursor is not None else None
         except (TypeError, ValueError):
             raise ValueError('Invalid event pagination.') from None
+        if cursor is not None and not 0 < cursor <= 2**63 - 1:
+            raise ValueError('Invalid event pagination.')
         if status not in (None, '', 'pending', 'resolved', 'none'):
             raise ValueError('Invalid review status.')
         conditions, args = [], []

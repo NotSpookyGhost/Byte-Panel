@@ -336,7 +336,7 @@ async function setup({kind = 'settings', initial, permissions = ['settings.manag
     const templates = ['settings', 'players'].map(name => fs.readFileSync(path.join(__dirname, '../app/templates/' + name + '.html'), 'utf8'));
     templates.forEach(template => {
         assert.match(template, /filename='connection_guard.js'/);
-        assert.match(template, /<h2(?: id="cg-events-title")?>Byte Guard<\/h2>/);
+        assert.match(template, /<h2(?: id="cg-events-title")?>{{ guard_mark\(config.get\('theme'\), 'logo'\) }}<\/h2>/);
         assert.ok(!template.includes('Connection Guard'));
     });
     assert.match(templates[0], /id="cg-license-key" type="password"/);

@@ -91,6 +91,7 @@
 .obsidian .admin-label { margin-top:23px; }
 .obsidian .panel-sidebar .nav-link { display:flex; align-items:center; gap:12px; font-size:12px; padding:10px 12px; min-height:40px; border:1px solid transparent; border-radius:7px; color:var(--text-muted); white-space:nowrap; background:transparent; }
 .obsidian .panel-sidebar .nav-link:hover { background:var(--bg-hover); color:var(--text-main); }
+.obsidian .panel-sidebar .byte-guard-icon { display:block; width:18px; height:18px; flex-shrink:0; }
 .obsidian .panel-sidebar .nav-link.active { background:var(--accent-soft); color:var(--accent); border-color:var(--accent-soft); }
 .obsidian.theme-light .panel-sidebar .nav-link.active { background:var(--accent); color:var(--accent-ink); }
 .obsidian .sidebar-footer { margin-top:24px; padding:16px 0 0; border-top:1px solid var(--border); }

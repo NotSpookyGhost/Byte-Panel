@@ -15,6 +15,8 @@ final class DurableState {
     private final Path marker;
     private final String initializationId;
     private JsonObject state;
+    // Gameplay event listeners must not wait for journal writes or a roster fsync.
+    private volatile String mode = "enforce";
     private boolean existed;
     private boolean failed;
 
@@ -33,6 +35,7 @@ final class DurableState {
             try {
                 state = JsonParser.parseString(Files.readString(path)).getAsJsonObject();
                 validate(state, true);
+                mode = Protocol.string(state, "mode");
             } catch (RuntimeException e) { throw new IOException("Corrupt companion state; administrator recovery required"); }
         }
     }
@@ -84,7 +87,7 @@ final class DurableState {
         catch (IllegalArgumentException e) { return false; }
     }
     synchronized boolean ready() { return state != null && !failed; }
-    synchronized String mode() { return state == null ? "enforce" : state.get("mode").getAsString(); }
+    String mode() { return mode; }
     synchronized long revision() { return state == null ? -1 : state.get("policy_revision").getAsLong(); }
     synchronized String fallback(String identity, String ip) throws IOException {
         ensureReady();
@@ -262,6 +265,7 @@ final class DurableState {
             syncDirectory();
             existed = true;
             state = next;
+            mode = next.get("mode").getAsString();
         } catch (IOException | RuntimeException e) {
             failed = true;
             throw new IOException("Could not persist private connection state");

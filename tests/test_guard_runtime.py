@@ -2,6 +2,7 @@
 import http.client
 import json
 import os
+import sqlite3
 from pathlib import Path
 import sys
 import tempfile
@@ -121,6 +122,48 @@ class RuntimeBoundaryTests(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_bridge_overload_reports_unavailability_explicitly(self):
+        self.runtime.start_bridge()
+        slots = self.runtime.httpd.slots
+        for _ in range(32):
+            self.assertTrue(slots.acquire(blocking=False))
+        connection = http.client.HTTPConnection('127.0.0.1', self.runtime.port, timeout=3)
+        self.addCleanup(connection.close)
+        connection.request('GET', '/v1/snapshot')
+        self.assertEqual(connection.getresponse().status, 503)
+
+    def test_bridge_bind_failure_is_visible_and_enabled_start_stays_blocked(self):
+        with patch('guard_runtime._BoundedServer', side_effect=OSError('address occupied')), \
+             patch.object(self.app.logger, 'exception') as logged:
+            self.runtime.start_bridge()
+        self.assertIsNone(self.runtime.httpd)
+        logged.assert_called_once()
+        self.assertEqual(self.runtime.prepare_start(), [])
+        self.runtime.guard.save_settings({'mode': 'enforce'})
+        self.assertFalse(self.runtime.settings()['health']['healthy'])
+        self.assertEqual(self.runtime.settings()['health']['status'], 'Bridge unavailable')
+        with self.assertRaisesRegex(GuardAuthError, 'bridge'):
+            self.runtime.prepare_start()
+
+    def test_token_file_with_invalid_shape_is_replaced(self):
+        path = self.root / 'connection-security/bridge-token.json'
+        old_token = self.runtime._token()
+        path.write_text('[]', encoding='utf-8')
+        self.runtime.token_scope = None
+        token = self.runtime._token()
+        self.assertNotEqual(token, old_token)
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8')), {'scope': self.scope, 'token': token})
+
+    def test_storage_failures_and_invalid_cursors_return_json(self):
+        response = self.client.get('/api/connection-security/events?cursor=9223372036854775808')
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response.is_json)
+        with patch.object(self.runtime.guard, 'get_events', side_effect=sqlite3.OperationalError('private path')):
+            response = self.client.get('/api/connection-security/events')
+        self.assertEqual(response.status_code, 503)
+        self.assertTrue(response.is_json)
+        self.assertNotIn('private path', response.json['error'])
+
     def test_scope_replacement_rotates_private_config_and_token(self):
         self.jar(self.server / 'plugins/BytePanelGuard.jar', 'BytePanelGuard')
         first_path = self.runtime.prepare_start()[0].split('=', 1)[1]
@@ -144,13 +187,20 @@ class RuntimeBoundaryTests(unittest.TestCase):
             with self.assertRaisesRegex(GuardAuthError, 'bridge'):
                 self.runtime.prepare_start()
             self.runtime.start_bridge()
-            with self.assertRaisesRegex(GuardAuthError, 'integrity'):
-                self.runtime.prepare_start()
+            for invalid in ('', '0' * 128, digest(bundle) + '\nextra'):
+                checksum.write_text(invalid)
+                with self.assertRaisesRegex(GuardAuthError, 'integrity'):
+                    self.runtime.prepare_start()
             checksum.write_text(digest(bundle))
             args = self.runtime.prepare_start()
             self.assertEqual(len(args), 1)
             self.assertTrue((self.server / 'plugins/BytePanelGuard.jar').is_file())
             self.assertNotIn(self.runtime._token(), ' '.join(args))
+            checksum.write_text(digest(bundle) + '  BytePanelGuard.jar\n')
+            from guard_runtime import atomic_private
+            with patch('guard_runtime.atomic_private', wraps=atomic_private) as write:
+                self.assertEqual(self.runtime.prepare_start(), args)
+            self.assertFalse(any(call.args[0].suffix == '.jar' for call in write.call_args_list))
 
     def test_mode_switch_requires_explicit_confirmation(self):
         (self.server / 'server.properties').write_text('online-mode=false')

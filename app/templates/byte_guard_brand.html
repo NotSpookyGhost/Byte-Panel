@@ -1,0 +1,6 @@
+{% macro guard_mark(theme, kind='icon') -%}
+    {% set surface = 'light' if theme == 'light' else 'dark' %}
+    {% set is_logo = kind == 'logo' %}
+    <img class="byte-guard-{{ kind }}" src="{{ url_for('static', filename='byte-guard/byte-guard-' ~ kind ~ '-on-' ~ surface ~ '.svg', v=app_version) }}"
+         width="{{ 439 if is_logo else 120 }}" height="{{ 112 if is_logo else 120 }}" alt="{{ 'Byte Guard' if is_logo else '' }}">
+{%- endmacro %}

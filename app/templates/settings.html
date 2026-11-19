@@ -48,8 +48,9 @@
             </div>
 
             <section id="settings-email" data-settings-panel="email" role="tabpanel" aria-labelledby="settings-tab-email">{% include 'smtp_settings.html' %}</section>
+            {% from 'byte_guard_brand.html' import guard_mark with context %}
             <section class="card connection-guard" id="settings-security" data-settings-panel="security" role="tabpanel" aria-labelledby="settings-tab-security" hidden>
-                <h2>Byte Guard</h2>
+                <h2>{{ guard_mark(config.get('theme'), 'logo') }}</h2>
                 <p class="cg-notice">Experimental: live Linux server compatibility still needs validation. Begin with Monitor and test your exact server/AuthMe combination before relying on Enforce. A failed companion plugin is not an independent network gate.</p>
                 <p class="field-help">Compare incoming player connections with their accepted IPs and approved geographic areas before they enter the world. Location is approximate and is not proof of identity. This release supports directly connected Paper and Purpur servers.</p>
                 <p class="cg-notice">Offline-mode servers do not authenticate Minecraft account ownership. AuthMe is required when Byte Guard is in Monitor or Enforce mode, and is strongly recommended even when the guard is off.</p>

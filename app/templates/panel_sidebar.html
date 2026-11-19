@@ -1,4 +1,5 @@
 {% from 'ui_icons.html' import icon, brand %}
+{% from 'byte_guard_brand.html' import guard_mark with context %}
 {% set restricted = current_user is defined and current_user and current_user.must_change_password %}
 <a href="#panel-content" class="skip-link">Skip to content</a>
 <button class="sidebar-overlay" id="sidebar-overlay" type="button" aria-label="Close navigation" hidden></button>
@@ -13,6 +14,9 @@
         {% set allowed = can is not defined or not permission or (permission == 'backups' and (can('backups.create') or can('backups.restore'))) or (permission != 'backups' and can(permission)) %}
         {% if allowed and (path not in ['/plugins','/mods'] or (config.get('server_type') or '') | lower in ['paper','purpur','forge','fabric']) %}
         <a href="{{ path }}" class="nav-link{% if request.path == path %} active{% endif %}"{% if request.path == path %} aria-current="page"{% endif %}>{{ icon(glyph) }}<span>{{ label }}</span></a>
+        {% if path == '/players' %}
+        <a href="/players#cg-player-security" class="nav-link" data-byte-guard-link>{{ guard_mark(config.get('theme')) }}<span>Byte Guard</span></a>
+        {% endif %}
         {% endif %}
         {% endfor %}
         {% if config.get('bluemap_enabled') %}<a href="/map/" class="nav-link" target="_blank" rel="noopener">{{ icon('map') }}<span>Map</span></a>{% endif %}

@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import secrets
 import socket
+import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -14,6 +15,8 @@ from flask import Blueprint, abort, g, jsonify, request
 from connection_guard import ConnectionGuard, GuardConflict
 from guard_auth import GuardAuth, GuardAuthError, GUARD_JAR, SUPPORTED_VERSIONS, KNOWN_PROVIDERS
 from guard_auth import atomic_private, checked_path, descriptor, digest
+
+MAX_COMPANION_BYTES = 16 * 1024 * 1024
 
 
 def _java_unescape(value):
@@ -46,16 +49,19 @@ def effective_online_mode(server):
         if path.stat().st_size > 1024 * 1024:
             raise GuardAuthError('server.properties exceeds the safe validation limit.')
         # Java Properties.load(InputStream) uses ISO-8859-1; relevant keys are ASCII.
-        pending = ''
+        pending = []
         for physical in re.split(r'\r\n|\n|\r', path.read_text('latin-1')):
             if not pending and physical.lstrip(' \t\f').startswith(('#', '!')):
                 continue
-            line = pending + (physical.lstrip(' \t\f') if pending else physical)
+            line = physical.lstrip(' \t\f') if pending else physical
             tail = len(line) - len(line.rstrip('\\'))
             if tail % 2:
-                pending = line[:-1]
+                pending.append(line[:-1])
                 continue
-            pending = ''
+            if pending:
+                pending.append(line)
+                line = ''.join(pending)
+                pending.clear()
             line = line.lstrip(' \t\f')
             if not line or line.startswith(('#', '!')):
                 continue
@@ -111,7 +117,15 @@ class _BoundedServer(ThreadingHTTPServer):
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(False):
-            self.shutdown_request(request)
+            # A closed socket looks like an outage to the companion. Return an
+            # explicit overload response so it cannot treat overload as approval.
+            try:
+                request.settimeout(0.05)
+                request.sendall(b'HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+            except OSError:
+                pass
+            finally:
+                self.shutdown_request(request)
             return
         try:
             super().process_request(request, client_address)
@@ -136,6 +150,7 @@ class GuardRuntime:
         self.on_outcome = on_outcome or (lambda result, payload: None)
         self.port, self.httpd = port, None
         self.start_lock = threading.Lock()
+        self.token_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.guard = ConnectionGuard(data_dir, security.store.scope, self.effective_config)
         self.auth = GuardAuth(server_dir, data_dir, load_config)
@@ -150,6 +165,10 @@ class GuardRuntime:
         return config
 
     def _token(self):
+        with self.token_lock:
+            return self._ensure_token()
+
+    def _ensure_token(self):
         scope = self.security.store.scope()
         if self.token_scope != scope:
             path = checked_path(self.data, 'connection-security/bridge-token.json', missing=True)
@@ -157,7 +176,9 @@ class GuardRuntime:
             if path.exists():
                 try:
                     if path.stat().st_size < 4096:
-                        value = json.loads(path.read_text('utf-8'))
+                        saved = json.loads(path.read_text('utf-8'))
+                        if isinstance(saved, dict):
+                            value = saved
                 except (ValueError, OSError):
                     value = {}
             token = value.get('token')
@@ -170,17 +191,23 @@ class GuardRuntime:
     def enabled(self):
         return self.guard.config().get('mode', 'off') != 'off'
 
-    def auth_status(self):
+    def auth_status(self, identity_mode=None, enabled=None):
         result = self.auth.status()
-        result['online_mode'] = self.effective_config()['identity_mode'] == 'online'
-        result['required'] = self.enabled() and not result['online_mode']
+        identity_mode = identity_mode or self.effective_config()['identity_mode']
+        result['online_mode'] = identity_mode == 'online'
+        result['required'] = not result['online_mode'] and (self.enabled() if enabled is None else enabled)
         result['server_running'] = bool(self.is_running())
         return result
 
     def settings(self):
         result = dict(self.guard.snapshot())
-        result.update(health=result.get('bridge', {}), auth=self.auth_status())
-        result['effective_identity_mode'] = self.effective_config()['identity_mode']
+        identity_mode = self.effective_config()['identity_mode']
+        health = result.get('bridge', {})
+        if self.httpd is None:
+            health = dict(health, healthy=False, status='Bridge unavailable',
+                          message='The private Byte Guard bridge is offline. Check the panel logs.')
+        result.update(health=health, auth=self.auth_status(identity_mode, result['mode'] != 'off'))
+        result['effective_identity_mode'] = identity_mode
         result['bridge_running'] = self.httpd is not None
         return result
 
@@ -262,18 +289,31 @@ class GuardRuntime:
             checksum_file = bundled.with_suffix('.sha512')
             if not bundled.is_file() or not checksum_file.is_file():
                 raise GuardAuthError('Bundled Byte Guard is missing. Rebuild this panel image before enabling it.')
-            expected_hash = checksum_file.read_text('ascii').strip().split()[0]
-            if not re.fullmatch(r'[a-f0-9]{128}', expected_hash) or digest(bundled) != expected_hash:
+            try:
+                with checksum_file.open('rb') as handle:
+                    checksum = handle.read(4097)
+                with bundled.open('rb') as handle:
+                    content = handle.read(MAX_COMPANION_BYTES + 1)
+            except OSError:
+                raise GuardAuthError('Bundled Byte Guard could not be read. Rebuild the panel image.') from None
+            # Accept both the bundled plain digest and a standard sha512sum line.
+            checksum_line = re.fullmatch(rb'([a-f0-9]{128})(?:[ \t][^\r\n]*)?(?:\r?\n)?', checksum)
+            expected_hash = checksum_line.group(1) if checksum_line else None
+            if (len(checksum) > 4096 or not expected_hash or not 0 < len(content) <= MAX_COMPANION_BYTES
+                    or hashlib.sha512(content).hexdigest().encode('ascii') != expected_hash):
                 raise GuardAuthError('Bundled Byte Guard failed its integrity check.')
             for item in self.auth.inventory():
                 if item['name'].lower() == 'bytepanelguard' and item['filename'] != GUARD_JAR:
                     raise GuardAuthError('A duplicate or renamed Byte Guard companion (BytePanelGuard) was found. Remove it before starting.')
             path.parent.mkdir(exist_ok=True)
-            if path.exists():
+            installed_matches = (path.is_file() and path.stat().st_size == len(content)
+                                 and digest(path).encode('ascii') == expected_hash)
+            if path.exists() and not installed_matches:
                 meta = descriptor(path)
                 if not meta or meta['name'].lower() != 'bytepanelguard':
                     raise GuardAuthError('The reserved Guard filename contains an unexpected plugin. Review it manually.')
-            atomic_private(path, bundled.read_bytes())
+            if not installed_matches:
+                atomic_private(path, content)
         # A replacement server never loads a former server's durable outage roster.
         scope_key = hashlib.sha256(self.security.store.scope().encode()).hexdigest()
         identity_mode = self.effective_config()['identity_mode']
@@ -286,11 +326,13 @@ class GuardRuntime:
         return ['-Dbytepanel.guard.config=' + str(private_config)]
 
     def reset(self):
-        old_scope = self.token_scope
-        self.guard.reset()
-        self.token_scope = None
-        self._token()
-        if old_scope and old_scope != self.token_scope:
+        with self.token_lock:
+            old_scope = self.token_scope
+            self.guard.reset()
+            self.token_scope = None
+            self._ensure_token()
+            new_scope = self.token_scope
+        if old_scope and old_scope != new_scope:
             # Only our exact files in the revoked scope; never recurse through
             # arbitrary data or touch credentials/AuthMe account data.
             old_key = hashlib.sha256(old_scope.encode()).hexdigest()
@@ -407,9 +449,18 @@ class GuardRuntime:
                     except Exception:
                         self.reply(503, dict(error='The complete security roster is unavailable.'))
 
-            self.httpd = _BoundedServer(('127.0.0.1', self.port), Handler)
-            self.port = self.httpd.server_port
-            threading.Thread(target=self.httpd.serve_forever, name='connection-guard-bridge', daemon=True).start()
+            try:
+                server = _BoundedServer(('127.0.0.1', self.port), Handler)
+            except OSError:
+                self.app.logger.exception('Could not bind Byte Guard private bridge. Guard-enabled starts are blocked.')
+                return
+            try:
+                threading.Thread(target=server.serve_forever, name='connection-guard-bridge', daemon=True).start()
+            except RuntimeError:
+                server.server_close()
+                self.app.logger.exception('Could not start Byte Guard private bridge. Guard-enabled starts are blocked.')
+                return
+            self.port, self.httpd = server.server_port, server
 
     def close(self):
         self.stop_event.set()
@@ -442,6 +493,7 @@ class GuardRuntime:
             return jsonify(error=str(error), message=str(error)), 400
 
         @bp.errorhandler(OSError)
+        @bp.errorhandler(sqlite3.Error)
         def storage(error):
             return jsonify(error='Security storage is unavailable. Check permissions and free space.'), 503
 
