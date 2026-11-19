@@ -72,6 +72,13 @@ assert.equal(denseResult.tokens.length, 1);
 assert.equal(textOf(denseResult), dense);
 const normalLongConfig = 'some-setting: true # explanatory comment\n'.repeat(2000);
 assert.equal(editor.tokenize(normalLongConfig, 'config.yml').highlighted, true);
+// A long number-shaped invalid token must not cause quadratic regex backtracking.
+const numericSpoof = '1'.repeat(editor.limits.maxLine - 2) + 'z';
+const numericStart = performance.now();
+for (let run = 0; run < 10; run++) {
+    assert.equal(textOf(editor.tokenize(numericSpoof, 'config.json')), numericSpoof);
+}
+assert.ok(performance.now() - numericStart < 1000, 'numeric lookalikes should remain linear-time');
 
 // Seeded fuzz input exercises progress/termination and exact preservation.
 let random = 1234567;

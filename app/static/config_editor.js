@@ -18,7 +18,7 @@
         yaml: 'yaml', yml: 'yaml', json: 'json', json5: 'json5',
         properties: 'properties', toml: 'toml', ini: 'ini', cfg: 'ini', conf: 'ini', xml: 'xml'
     };
-    const number = /^[+-]?(?:0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|(?:[0-9][0-9_]*\.?[0-9_]*|\.[0-9_]+)(?:[eE][+-]?[0-9_]+)?|Infinity|NaN)$/;
+    const number = /^[+-]?(?:0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|(?:[0-9][0-9_]*(?:\.[0-9_]*)?|\.[0-9_]+)(?:[eE][+-]?[0-9_]+)?|Infinity|NaN)$/;
     const literal = /^(?:true|false|null|nil|none|yes|no|on|off|~)$/i;
     const wordCharacter = /[A-Za-z0-9_.$/@%+~\\-]/;
     const whitespace = /\s/;

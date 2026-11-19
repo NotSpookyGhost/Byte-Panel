@@ -290,6 +290,13 @@ Replace the Unraid example path with your persistent host data directory,
 separate from the source folder. To use panel port **5050** instead, change
 `-p 5000:5000` to `-p 5050:5000`. Minecraft uses port **25565** by default.
 
+**Unraid container icon:** The image includes a default icon via the
+`net.unraid.docker.icon` label (`https://i.imgur.com/zKISZmP.png`). Rebuild the
+image and recreate existing containers to pick it up. If your Unraid template
+or Compose settings override the icon, set their icon URL/label to the same
+address. This only changes the container-manager icon, not the panel logo or
+Minecraft server icon; other Docker interfaces may ignore Unraid-specific labels.
+
 ### 3. Complete setup
 
 Open `http://SERVER-IP:5000` (or your chosen host port), create the owner account

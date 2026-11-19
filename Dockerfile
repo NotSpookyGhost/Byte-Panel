@@ -1,5 +1,8 @@
 FROM alpine:latest
 
+# Default container icon for Unraid; deployment labels can override it.
+LABEL net.unraid.docker.icon="https://i.imgur.com/zKISZmP.png"
+
 # Install system dependencies AND pre-compiled Python packages
 RUN apk add --no-cache \
     supervisor \
