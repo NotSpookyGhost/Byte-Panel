@@ -52,6 +52,12 @@
             let commandDraft = '';
 
             function rememberCommand(command) {
+                // Authentication secrets are never recallable, even in this page.
+                if (/^\/?(?:(?:[a-z0-9_]+:)?(?:login|log|l|register|reg|changepassword|changepass|cp|unregister|unreg|email|totp|2fa|captcha|verification)\b|(?:authme:)?authme\s+(?:register|changepassword|password)\b)/i.test(command)) {
+                    commandHistoryIndex = commandHistory.length;
+                    commandDraft = '';
+                    return;
+                }
                 if (commandHistory[commandHistory.length - 1] !== command) {
                     commandHistory.push(command);
                     if (commandHistory.length > COMMAND_HISTORY_LIMIT) commandHistory.shift();

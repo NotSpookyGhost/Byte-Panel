@@ -7,3 +7,17 @@ tests
 **/*.pyc
 .pytest_cache
 *.code-workspace
+guard-plugin/target
+guard-plugin/.tools
+data
+server
+logs
+.env
+.env.*
+**/*.key
+**/*.pem
+**/*.db
+**/*.db-*
+**/*.sqlite*
+.connection-guard-initialized.json
+connection-security

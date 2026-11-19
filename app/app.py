@@ -12,10 +12,9 @@ import shutil
 import zipfile
 import sqlite3
 import hashlib
-import urllib.request
+import ipaddress
 from contextlib import closing, contextmanager
 from functools import wraps
-import geoip2.database
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory, send_file, make_response, g, abort
 from flask_socketio import SocketIO, emit
 from werkzeug.utils import secure_filename
@@ -32,6 +31,7 @@ from backup_lifecycle import BackupLifecycle
 from server_automation import ServerAutomation
 from server_icon import server_icon_path, save_server_icon, ServerIconError
 from bluemap import register_bluemap, checked_port
+from guard_runtime import GuardRuntime, redact_auth_commands
 
 release_service = MinecraftReleases()
 startup_log_status = StartupLogStatus()
@@ -92,7 +92,6 @@ os.makedirs(os.path.join(DATA_DIR, "logs"), exist_ok=True)
 CONFIG_FILE = os.path.join(DATA_DIR, "panel_config.json")
 CONFIG_LOCK = threading.RLock()
 PLAYER_DB_FILE = os.path.join(DATA_DIR, "players.db")
-GEOIP_DB_FILE = os.path.join(DATA_DIR, "GeoLite2-Country.mmdb")
 
 def init_db():
     conn = sqlite3.connect(PLAYER_DB_FILE)
@@ -141,18 +140,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-def ensure_geoip_db():
-    if not os.path.exists(GEOIP_DB_FILE):
-        print("Downloading GeoLite2 Country database...")
-        try:
-            url = "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
-            urllib.request.urlretrieve(url, GEOIP_DB_FILE)
-            print("Download complete.")
-        except Exception as e:
-            print(f"Error downloading GeoIP DB: {e}")
-
 init_db()
-ensure_geoip_db()
 
 
 
@@ -160,6 +148,8 @@ ensure_geoip_db()
 MINECRAFT_PROCESS = None
 MINECRAFT_LOG_THREAD = None
 CONSOLE_HISTORY = []
+PLAYER_STATE_LOCK = threading.RLock()
+GUARD_PLAYER_SESSIONS = {}
 
 # --- Core System Configuration Fallbacks ---
 DEFAULT_CONFIG = {
@@ -261,8 +251,9 @@ def save_player_history(data):
 
 def clear_player_data():
     """Reset server-scoped player records without deleting an active SQLite/WAL file."""
-    with closing(sqlite3.connect(PLAYER_DB_FILE)) as conn:
+    with PLAYER_STATE_LOCK, closing(sqlite3.connect(PLAYER_DB_FILE)) as conn:
         with conn:
+            GUARD_PLAYER_SESSIONS.clear()
             conn.execute("DELETE FROM login_events")
             conn.execute("DELETE FROM ban_events")
             conn.execute("DELETE FROM users")
@@ -271,6 +262,49 @@ def clear_player_data():
                 os.remove(os.path.join(DATA_DIR, "player_history.json"))
             except FileNotFoundError:
                 pass
+
+def record_player_join(player_uuid, username, ip, country, timestamp=None):
+    """Display history only. Log observations never authorize Guard admission."""
+    if not player_uuid or player_uuid == 'unknown':
+        return
+    timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with PLAYER_STATE_LOCK, closing(sqlite3.connect(PLAYER_DB_FILE)) as conn:
+        with conn:
+            conn.execute('''INSERT INTO users (uuid,username,first_seen,last_seen,online_status)
+                VALUES (?,?,?,?,1) ON CONFLICT(uuid) DO UPDATE SET
+                username=excluded.username,last_seen=excluded.last_seen,online_status=1''',
+                (player_uuid, username, timestamp, timestamp))
+            conn.execute('INSERT INTO login_events(uuid,timestamp,ip,country) VALUES (?,?,?,?)',
+                         (player_uuid, timestamp, ip, country))
+
+
+def record_guard_outcome(result, payload):
+    # Only the authenticated companion's completed session can update this view.
+    with PLAYER_STATE_LOCK:
+        if result.get('scope') != security.store.scope():
+            return
+        name = str(result.get('username', '')).casefold()
+        attempt = result.get('attempt_id')
+        if result.get('committed'):
+            player_uuid = result.get('uuid') or result['identity']
+            record_player_join(player_uuid, result['username'], result['ip'], result['country'])
+            GUARD_PLAYER_SESSIONS[name] = (attempt, player_uuid)
+        if result.get('stage') == 'disconnected' and GUARD_PLAYER_SESSIONS.get(name, (None,))[0] == attempt:
+            _, player_uuid = GUARD_PLAYER_SESSIONS.pop(name)
+            with closing(sqlite3.connect(PLAYER_DB_FILE)) as conn:
+                with conn:
+                    conn.execute('UPDATE users SET online_status=0 WHERE uuid=?', (player_uuid,))
+
+
+def player_country(ip):
+    try:
+        address = ipaddress.ip_address(ip)
+        if not address.is_global:
+            return 'Local Network' if address.is_private else 'Unknown'
+        location = guard_runtime.guard.geoip.lookup(str(address))
+        return location.get('country_name') or location.get('country') or 'Unknown'
+    except (ValueError, OSError):
+        return 'Unknown'
 
 def _log_to_console(msg):
     config = load_config()
@@ -510,58 +544,6 @@ def build_server_command(config, ram_gb=None):
         raise FileNotFoundError("server.jar is missing from the server directory.")
     return [java_bin, *memory_args, '-jar', server_jar, 'nogui']
 
-def parse_log_line(line):
-    join_match = re.search(r"UUID of player (.+?) is (.+)", line)
-    ip_match = re.search(r"(.+?)\[/(.+?):\d+\] logged in", line)
-    
-    if join_match:
-        username = join_match.group(1)
-        uuid = join_match.group(2).strip()
-        history = load_player_history()
-        
-        if username not in history:
-            history[username] = {
-                "username": username,
-                "uuid": uuid,
-                "ip": "Unknown",
-                "country": "Unknown",
-                "last_seen": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-        else:
-            history[username]["uuid"] = uuid
-            history[username]["last_seen"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        save_player_history(history)
-        
-    if ip_match:
-        username = ip_match.group(1)
-        ip = ip_match.group(2)
-        history = load_player_history()
-        if username in history:
-            history[username]["ip"] = ip
-            if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.") or ip.startswith("127."):
-                history[username]["country"] = "Local Network"
-            else:
-                try:
-                    geo = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3).json()
-                    history[username]["country"] = geo.get("country_name", "Unknown")
-                except Exception:
-                    history[username]["country"] = "Unknown"
-            save_player_history(history)
-
-def monitor_minecraft_stream(process):
-    global CONSOLE_HISTORY
-    for line in iter(process.stdout.readline, ''):
-        if not line:
-            break
-        decoded_line = line.strip()
-        CONSOLE_HISTORY.append(decoded_line)
-        if len(CONSOLE_HISTORY) > 1200:
-            CONSOLE_HISTORY.pop(0)
-            
-        parse_log_line(decoded_line)
-        security.emit_console(socketio, decoded_line)
-    process.stdout.close()
-
 def start_minecraft_server(automatic=False):
     global MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
     config = load_config()
@@ -598,6 +580,10 @@ def start_minecraft_server(automatic=False):
     try:
         # 2. Build the engine-specific Java execution command.
         cmd = build_server_command(config, ram_gb)
+        # All manual/automatic starts cross the same effective-properties gate.
+        # It also considers queued overrides before any file is applied.
+        cmd[1:1] = guard_runtime.prepare_start()
+        guard_active = guard_runtime.enabled()
 
         # 3. Launch in the background and pipe output to a log file
         log_path = os.path.join(SERVER_DIR, "console.log")
@@ -655,7 +641,7 @@ def start_minecraft_server(automatic=False):
         # Catch invalid launch targets and immediate JVM failures before claiming success.
         time.sleep(0.75)
         if process.poll() is not None:
-            startup_output = process.stdout.read() if process.stdout else ''
+            startup_output = redact_auth_commands(process.stdout.read()) if process.stdout else ''
             if startup_output:
                 log_file.write(startup_output)
                 log_file.flush()
@@ -670,63 +656,39 @@ def start_minecraft_server(automatic=False):
             pending_uuids = {} # username -> uuid map
             
             for line in proc.stdout:
+                line = redact_auth_commands(line)
                 log_f.write(line)
                 log_f.flush()
                 
                 # Active Log Parsing for Security Monitor
                 try:
+                    # Guard uses session-bound auth/join outcomes, never console text.
+                    if guard_active:
+                        continue
                     # 1. Capture UUID mappings
                     uuid_match = re.search(r'UUID of player ([a-zA-Z0-9_]+) is ([a-zA-Z0-9\-]+)', line)
                     if uuid_match:
                         pending_uuids[uuid_match.group(1)] = uuid_match.group(2)
                         
                     # 2. Capture Logins with IPs
-                    login_match = re.search(r'([a-zA-Z0-9_]+)\[/([0-9\.]+):[0-9]+\] logged in', line)
+                    login_match = re.search(r'([a-zA-Z0-9_]+)\[/(\[?[0-9a-fA-F:.]+\]?):[0-9]+\] logged in', line)
                     if login_match:
                         username = login_match.group(1)
-                        ip = login_match.group(2)
-                        uuid = pending_uuids.get(username, "unknown")
-                        
-                        country = "Unknown"
-                        if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172.") or ip.startswith("127."):
-                            country = "Local Network"
-                        elif os.path.exists(GEOIP_DB_FILE):
-                            try:
-                                with geoip2.database.Reader(GEOIP_DB_FILE) as reader:
-                                    country = reader.country(ip).country.name or "Unknown"
-                            except Exception:
-                                pass
-                                
-                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        
-                        conn = sqlite3.connect(PLAYER_DB_FILE)
-                        # Upsert user
-                        conn.execute('''
-                            INSERT INTO users (uuid, username, first_seen, last_seen, online_status) 
-                            VALUES (?, ?, ?, ?, 1)
-                            ON CONFLICT(uuid) DO UPDATE SET 
-                                username=excluded.username,
-                                last_seen=excluded.last_seen,
-                                online_status=1
-                        ''', (uuid, username, timestamp, timestamp))
-                        
-                        # Insert login event
-                        conn.execute('''
-                            INSERT INTO login_events (uuid, timestamp, ip, country)
-                            VALUES (?, ?, ?, ?)
-                        ''', (uuid, timestamp, ip, country))
-                        
-                        conn.commit()
-                        conn.close()
+                        ip = str(ipaddress.ip_address(login_match.group(2).strip('[]')))
+                        player_uuid = pending_uuids.get(username)
+                        # Preserve an observed but ambiguous name separately, never
+                        # coalesce multiple people into the shared "unknown" UUID.
+                        if not player_uuid:
+                            player_uuid = 'unverified:' + username.casefold()
+                        record_player_join(player_uuid, username, ip, player_country(ip))
                         
                     # 3. Capture Disconnects
                     disconnect_match = re.search(r'([a-zA-Z0-9_]+) lost connection:', line)
                     if disconnect_match:
                         username = disconnect_match.group(1)
-                        conn = sqlite3.connect(PLAYER_DB_FILE)
-                        conn.execute("UPDATE users SET online_status = 0 WHERE username = ?", (username,))
-                        conn.commit()
-                        conn.close()
+                        with PLAYER_STATE_LOCK, closing(sqlite3.connect(PLAYER_DB_FILE)) as conn:
+                            with conn:
+                                conn.execute("UPDATE users SET online_status = 0 WHERE username = ?", (username,))
                         
                 except Exception as e:
                     print(f"Log parsing error: {e}", flush=True)
@@ -766,7 +728,7 @@ def start_minecraft_server(automatic=False):
         config['server_pid'] = None
         config['target_state'] = 'Offline'
         save_config(config)
-        print(f"[WATCHDOG] LAUNCH FAILURE: {str(e)}", flush=True)
+        app.logger.error('Minecraft startup refused: %s', redact_auth_commands(str(e)))
         return False
 
 def stop_minecraft_server():
@@ -946,6 +908,7 @@ def api_restore_backup():
     server_automation.stop()
     # Wipe current server directory
     addon_updates.reset()
+    clear_player_data()
     for f in os.listdir(SERVER_DIR):
         f_path = os.path.join(SERVER_DIR, f)
         try:
@@ -990,6 +953,7 @@ def api_restore_backup():
     restored_config['auto_restart'] = False
     save_config(restored_config)
     actor = security.store.reset(keep_actor=g.panel_user)
+    guard_runtime.reset()
     security.store.sign_in(session, actor)
     return jsonify({"status": "restored"})
 
@@ -1566,10 +1530,15 @@ def addon_file_mutation_guard():
         abort(409, description=str(error))
 
 
+guard_runtime = GuardRuntime(app, security, DATA_DIR, SERVER_DIR, load_config, read_properties,
+                             server_file_mutation_guard, server_process_active, record_guard_outcome)
+
 register_plugin_manager(app, SERVER_DIR, DATA_DIR, load_config, get_custom_assets_state,
-                        mutation_guard=addon_file_mutation_guard)
+                        mutation_guard=addon_file_mutation_guard, path_guard=guard_runtime.protect_path,
+                        content_guard=guard_runtime.protect_content)
 register_file_manager(app, SERVER_DIR, DATA_DIR, load_config, get_custom_assets_state,
-                      mutation_guard=server_file_mutation_guard)
+                      mutation_guard=server_file_mutation_guard, path_guard=guard_runtime.protect_path,
+                      content_guard=guard_runtime.protect_content)
 
 addon_updates = AddonUpdateService(SERVER_DIR, os.path.join(DATA_DIR, 'addon_updates.json'),
                                   load_config, server_process_active, server_file_mutation_guard)
@@ -2004,6 +1973,7 @@ def purge_server():
     config['welcome_seen'] = False
     save_config(config)
     security.store.reset()
+    guard_runtime.reset()
     session.clear()
     
     return jsonify({"status": "purged"})
@@ -2061,6 +2031,7 @@ def import_server():
 
     # Wipe current server files only after shutdown and log activity are complete.
     addon_updates.reset()
+    clear_player_data()
     for filename in os.listdir(SERVER_DIR):
         file_path = os.path.join(SERVER_DIR, filename)
         try:
@@ -2135,6 +2106,7 @@ def import_server():
     security.store.sign_in(session, actor)
         
     save_config(config)
+    guard_runtime.reset()
     
     return jsonify({"status": "imported"})
 
@@ -2288,6 +2260,8 @@ def handle_api_command():
 if __name__ == '__main__':
     # Only the actual panel process owns the automation thread; imports/tests
     # must never start Minecraft or a duplicate monitor.
+    guard_runtime.start_bridge()
+    threading.Thread(target=guard_runtime.maintenance, name='connection-guard-maintenance', daemon=True).start()
     automation_stop = threading.Event()
     automation_thread = threading.Thread(target=server_automation.run, args=(automation_stop,),
                                          name='minecraft-automation', daemon=True)

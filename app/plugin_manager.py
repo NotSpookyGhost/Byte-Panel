@@ -26,10 +26,13 @@ SUPPORTED_ENGINES = ('paper', 'purpur', 'forge', 'fabric')
 _WRITE_LOCK = threading.RLock()
 
 
-def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_assets, mutation_guard=None):
+def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_assets, mutation_guard=None,
+                            path_guard=None, content_guard=None):
     plugins = Blueprint('plugins', __name__)
     server_root = Path(server_dir).resolve()
     mutation_guard = mutation_guard or nullcontext
+    path_guard = path_guard or (lambda relative: None)
+    content_guard = content_guard or (lambda relative, path: None)
 
     def active_root():
         return server_root / g.addon_root_name
@@ -226,6 +229,7 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
         validate_text(content)
         with _WRITE_LOCK:
             path = checked_path(payload.get('path'))
+            path_guard(g.addon_root_name + '/' + payload.get('path'))
             original = read_text(path)
             if payload.get('revision') != hashlib.sha256(original).hexdigest():
                 abort(409, description='This config changed since you opened it. Reload it before saving.')
@@ -257,6 +261,7 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
         if not folder.is_dir():
             abort(400, description='Upload destination must be a folder.')
         relative = (folder / filename).relative_to(root).as_posix()
+        path_guard(g.addon_root_name + '/' + relative)
         target = checked_path(relative, must_exist=False)
         is_jar = target.suffix.lower() == '.jar'
         if is_jar and folder != root:
@@ -314,6 +319,7 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
                 validate_text(Path(temp_name).read_bytes())
             backup = None
             with _WRITE_LOCK:
+                content_guard(g.addon_root_name + '/' + relative, Path(temp_name))
                 target = checked_path(relative, must_exist=False)
                 if target.exists():
                     if not target.is_file():
@@ -350,6 +356,7 @@ def register_plugin_manager(app, server_dir, data_dir, load_config, get_custom_a
             revision = digest(path)
             if request.method == 'GET':
                 return jsonify(path=relative, name=path.name, revision=revision)
+            path_guard(g.addon_root_name + '/' + relative)
             if payload.get('revision') != revision:
                 abort(409, description='This JAR changed or was not confirmed. Refresh and confirm deletion again.')
             backup = backup_file(path)

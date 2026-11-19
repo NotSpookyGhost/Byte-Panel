@@ -145,6 +145,14 @@ const sent = env => env.requests.map(request => request.command);
     assert.equal(duplicates.input.value, '');
 
     const limited = harness();
+    const secrets = harness();
+    secrets.submit('list');
+    for (const command of ['/login secret', 'register secret secret', 'authme register Alice secret',
+        '/authme:changepassword old new', 'authme changepassword Alice new']) {
+        secrets.submit(command);
+    }
+    assert.deepEqual(secrets.history(), ['list'], 'Authentication secrets must not be retained in command history');
+    assert.equal(secrets.requests.length, 6, 'Explicit commands still reach Minecraft without changing their contents');
     for (let index = 1; index <= 105; index += 1) limited.submit('say command ' + index);
     assert.equal(limited.history().length, 100);
     assert.equal(limited.history()[0], 'say command 6');

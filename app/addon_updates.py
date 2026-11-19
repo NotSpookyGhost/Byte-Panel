@@ -20,6 +20,7 @@ import zipfile
 
 import requests
 from addon_retention import BACKUP_KEEP, BACKUP_MAX_AGE_DAYS, prune_update_backups
+from guard_auth import is_managed_jar
 
 
 MAX_JARS = 64
@@ -333,6 +334,11 @@ class AddonUpdateService:
         paths = sorted((path for path in root.iterdir() if path.name.lower().endswith('.jar')), key=lambda p: p.name)
         if len(paths) > MAX_JARS:
             raise AddonUpdateError('Automatic checks are limited to 64 JARs; manage this larger set manually.')
+        for path in paths:
+            _safe_file(path)
+        # Security components use their pinned compatibility manifest, not the
+        # generic latest-compatible update flow (even when Guard is disabled).
+        paths = [path for path in paths if not is_managed_jar(path)]
         return [dict(path=path, filename=path.name, sha512=_hash_file(path)) for path in paths]
 
     def _check(self):

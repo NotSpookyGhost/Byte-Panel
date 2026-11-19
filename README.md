@@ -22,6 +22,9 @@ its `/data` volume.
   downloads, manual-backup renaming, restores and imports.
 - **Accounts:** Owner protection, administrator/custom permissions and separate
   backup creation, restore and import permissions.
+- **Byte Guard (experimental):** Opt-in connection history and location
+  review for supported direct Paper/Purpur servers, with required AuthMe
+  authentication when Byte Guard is enabled in offline mode.
 - **Invitations:** SMTP welcome/password emails, customizable templates and
   temporary passwords that must be changed on first login.
 - **Customization:** Server icon/name, appearance settings and public BlueMap
@@ -54,12 +57,14 @@ CPU and memory readings describe the server process. TPS is not currently measur
 | **Runtime** | Java, timezone and automatic startup/crash recovery |
 | **Backups** | Schedule, retention and shutdown during backup |
 | **Addons** | Public BlueMap and opt-in plugin/mod updates |
+| **Security** | Byte Guard, your MaxMind credentials and offline authentication |
 | **Appearance** | Theme, accent, favicon and background |
 | **Email** | SMTP delivery and invitation settings |
 | **Operations** | Backup, import and owner-only purge/reset |
 
-Use **Save Settings** or **Apply Changes** to save changes. SMTP and automatic
-addon updates have separate save buttons. Settings do not restart Minecraft.
+Use **Save Settings** or **Apply Changes** to save changes. SMTP, automatic addon
+updates and Byte Guard have separate save buttons. Settings do not restart
+Minecraft.
 
 **Server icon:** Upload a PNG, JPEG or WebP in General (up to 5 MiB and 16 million
 pixels). The panel fits it into a 64×64 PNG for the login screen, sidebar server
@@ -145,6 +150,30 @@ An installation failure attempts rollback and disables automation for review.
 Purge/import/restore clear approvals and disable updates. Hangar integration is
 deferred; update Hangar-only plugins manually.
 
+### Byte Guard (experimental)
+
+Byte Guard is **Off by default**, with a **250 km** location radius. In
+**Settings > Security**, stop Minecraft, enter your own MaxMind account ID and
+license key, and use **Save and validate**. On an offline server, explicitly
+install or repair the compatible AuthMe integration when prompted; an existing
+authentication system is not silently replaced. Start with **Monitor** and review
+the connection timeline in **Players** before considering **Enforce**.
+
+Monitor records suspicious locations without enforcing geographic denials;
+Enforce can reject returning players from unfamiliar locations before world entry.
+Location is a risk signal, not proof of identity: VPNs, mobile networks and travel
+can trigger reviews. Offline accounts must successfully authenticate with AuthMe
+before a connection establishes trust. Review permission is **players.security**;
+IP banning remains a separate action and permission.
+
+This first release supports only manifest-listed **direct Paper/Purpur**
+combinations, not proxy forwarding, Forge, Fabric, Folia or Vanilla. The manifest
+pins publisher artifacts; it is **not a claim that every listed combination has
+passed live testing**. Linux Docker integration tests for these combinations have
+not been completed here. Read the [setup, recovery and release-validation guide](docs/connection-guard.md)
+before enabling enforcement on a production server. Discord verification is not
+implemented.
+
 ### Performance
 
 Console tails and startup detection use bounded log reads instead of repeatedly
@@ -197,7 +226,12 @@ ZIPs without it require manual version, engine and RAM selections during import.
 - **Container updates/restarts:** Keep accounts and server data when the same
   `/data` volume is used.
 
-Minecraft ZIP backups exclude panel accounts, session keys and SMTP credentials.
+Minecraft ZIP backups exclude panel accounts, session keys, SMTP/MaxMind
+credentials and private Byte Guard trust/token/journal state. AuthMe configuration and
+account data inside the server folder **are included** and are sensitive; use
+unique Minecraft authentication passwords, not email, Microsoft or panel
+passwords. Restore/import/purge switch Byte Guard off and establish a new Byte Guard scope.
+Treat a full-volume backup as secret because it includes private panel credentials.
 Back up the entire `/data` directory to protect the complete installation.
 
 ### Accounts, invitations and email templates

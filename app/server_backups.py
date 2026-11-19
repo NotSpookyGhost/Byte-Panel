@@ -178,6 +178,10 @@ class ServerBackups:
                         relative = path.relative_to(root).as_posix()
                         if relative in ('panel_config.json', 'player_history.json'):
                             continue
+                        # The companion is supplied by this image, never imported
+                        # as executable security code from a different panel.
+                        if relative.casefold() == 'plugins/bytepanelguard.jar':
+                            continue
                         include(archive, path, relative)
                         done += 1
                         progress(files_done=done, message=f'Compressing server files: {done} files saved...')

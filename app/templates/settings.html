@@ -17,6 +17,8 @@
     <script src="{{ url_for('static', filename='settings_ui.js', v=app_version) }}" defer></script>
     <script src="{{ url_for('static', filename='addon_updates.js', v=app_version) }}" defer></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='addon_updates.css', v=app_version) }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='connection_guard.css', v=app_version) }}">
+    <script src="{{ url_for('static', filename='connection_guard.js', v=app_version) }}" defer></script>
     <script src="{{ url_for('static', filename='backup_progress.js', v=app_version) }}" defer></script>
 </head>
 <body class="theme-{{ config.theme }} obsidian page-settings " data-accent="{{ config.get('accent', 'lime') }}" data-restricted="{{ 'true' if current_user is defined and current_user and current_user.must_change_password else 'false' }}">
@@ -28,11 +30,11 @@
         <main class="main-layout">
         {% include 'panel_header.html' %}
         <div class="main-content" id="panel-content" tabindex="-1">
-            <p class="settings-intro">Configure your server, addons, appearance and notifications. SMTP and automatic addon updates each have their own Save button; other changes are saved together.</p>
+            <p class="settings-intro">Configure your server, addons, security, appearance and notifications. Security, SMTP and automatic addon updates each have their own Save button; other changes are saved together.</p>
             {% if settings_error %}<p class="accounts-message" role="alert">{{ settings_error }}</p>{% endif %}
             {% if request.method == 'POST' and not settings_error %}<p class="accounts-message" role="status">{{ settings_message or 'Settings saved.' }}</p>{% endif %}
             <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
-                {% for key, label in [('general','General'),('runtime','Runtime'),('backups','Backups'),('addons','Addons'),('appearance','Appearance'),('email','Email'),('operations','Operations')] %}
+                {% for key, label in [('general','General'),('runtime','Runtime'),('backups','Backups'),('addons','Addons'),('security','Security'),('appearance','Appearance'),('email','Email'),('operations','Operations')] %}
                 <button type="button" class="settings-tab" id="settings-tab-{{ key }}" role="tab" aria-controls="settings-{{ key }}" aria-selected="{{ 'true' if loop.first else 'false' }}" data-settings-tab="{{ key }}">{{ label }}</button>
                 {% endfor %}
             </nav>
@@ -46,6 +48,80 @@
             </div>
 
             <section id="settings-email" data-settings-panel="email" role="tabpanel" aria-labelledby="settings-tab-email">{% include 'smtp_settings.html' %}</section>
+            <section class="card connection-guard" id="settings-security" data-settings-panel="security" role="tabpanel" aria-labelledby="settings-tab-security" hidden>
+                <h2>Byte Guard</h2>
+                <p class="cg-notice">Experimental: live Linux server compatibility still needs validation. Begin with Monitor and test your exact server/AuthMe combination before relying on Enforce. A failed companion plugin is not an independent network gate.</p>
+                <p class="field-help">Compare incoming player connections with their accepted IPs and approved geographic areas before they enter the world. Location is approximate and is not proof of identity. This release supports directly connected Paper and Purpur servers.</p>
+                <p class="cg-notice">Offline-mode servers do not authenticate Minecraft account ownership. AuthMe is required when Byte Guard is in Monitor or Enforce mode, and is strongly recommended even when the guard is off.</p>
+                <p id="cg-settings-message" class="cg-message" role="status">Loading Byte Guard settings...</p>
+                <form id="cg-settings-form" autocomplete="off" data-permission="settings.manage">
+                    <fieldset id="cg-settings-fields" disabled>
+                        <legend class="cg-sr-only">Byte Guard settings</legend>
+                        <div class="cg-grid">
+                            <div>
+                                <label for="cg-mode" class="field-label">Protection mode</label>
+                                <select id="cg-mode">
+                                    <option value="off">Off</option>
+                                    <option value="monitor">Monitor — record, do not block location changes</option>
+                                    <option value="enforce">Enforce — reject suspicious connections</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="cg-radius" class="field-label">Approved area radius (km)</label>
+                                <input id="cg-radius" type="number" value="250" min="1" max="20000" step="1" required>
+                                <p class="field-help">250 km is about 155 mi. A new IP must remain in the same country and fit inside an approved area, including GeoIP uncertainty. Ordinary joins never move the reference area.</p>
+                            </div>
+                        </div>
+                        <p id="cg-identity-mode" class="field-help"></p>
+                        <p class="field-help">Stop Minecraft before changing the guard mode. Prepare the database and, for offline mode, AuthMe below before enabling protection. Use Monitor to review expected decisions before switching to Enforce.</p>
+                        <h3>Your MaxMind GeoLite2 City account</h3>
+                        <p class="field-help">Enter your own free MaxMind account credentials. They download a local City database; player IPs are looked up locally, not sent to a web lookup service. No shared credentials are built into the image.</p>
+                        <div class="cg-grid">
+                            <div>
+                                <label for="cg-account-id" class="field-label">MaxMind account ID</label>
+                                <input id="cg-account-id" type="text" inputmode="numeric" maxlength="32" autocomplete="off">
+                            </div>
+                            <div>
+                                <label for="cg-license-key" class="field-label">MaxMind license key</label>
+                                <input id="cg-license-key" type="password" maxlength="256" autocomplete="new-password" aria-describedby="cg-license-help">
+                                <p id="cg-license-help" class="field-help">Leave blank to keep a saved key.</p>
+                                <label class="cg-check" for="cg-remove-key"><input type="checkbox" id="cg-remove-key"> Remove saved license key</label>
+                            </div>
+                        </div>
+                        <p class="field-help">Credentials stay in private panel data and are excluded from Minecraft backups. Updates are checked daily. An absent or stale database cannot approve a returning player's unfamiliar IP.</p>
+                        <p id="cg-unsaved" class="field-help" hidden>Unsaved security changes. Save before downloading the database or preparing authentication.</p>
+                        <div class="cg-actions">
+                            <button id="cg-save" type="submit" class="btn btn-primary">Save and validate</button>
+                            <button id="cg-refresh-settings" type="button" class="btn btn-outline">Refresh health</button>
+                            <button id="cg-update-db" type="button" class="btn btn-outline">Download / update City database</button>
+                        </div>
+                    </fieldset>
+                </form>
+                <div class="cg-status-grid">
+                    <section><h3>Protection health</h3><div id="cg-health" class="cg-detail" aria-live="polite"></div></section>
+                    <section><h3>GeoIP database</h3><div id="cg-geoip" class="cg-detail" aria-live="polite"></div></section>
+                </div>
+                <section class="cg-section">
+                    <h3>Offline-mode authentication</h3>
+                    <div id="cg-auth-status" class="cg-detail" aria-live="polite"></div>
+                    <p class="field-help">The panel only prepares a verified compatible AuthMe release while Minecraft is stopped. Existing accounts and configuration are preserved. Another authentication plugin requires manual review; the panel will not install a competing provider or silently change your authentication setup.</p>
+                    <div class="cg-actions">
+                        <button id="cg-auth-check" type="button" class="btn btn-outline" data-permission="settings.manage">Check authentication</button>
+                        <button id="cg-auth-install" type="button" class="btn btn-outline" data-permission="settings.manage" disabled>Install AuthMe</button>
+                        <button id="cg-auth-repair" type="button" class="btn btn-outline" data-permission="settings.manage" disabled>Repair managed AuthMe</button>
+                    </div>
+                </section>
+                <section class="cg-section">
+                    <h3>Existing player history</h3>
+                    <p class="field-help">Preview the first recorded IPs before importing them as reference locations. Confirm only if this history belongs to the current server. Historical IP locations are estimates, not proof of who owned the account. Invalid or ambiguous records are skipped.</p>
+                    <div class="cg-actions">
+                        <button id="cg-history-preview" type="button" class="btn btn-outline" data-permission="settings.manage">Preview player history</button>
+                        <button id="cg-history-import" type="button" class="btn btn-outline" data-permission="settings.manage" disabled>Confirm history belongs to this server</button>
+                    </div>
+                    <div id="cg-history-summary" class="field-help" role="status"></div>
+                    <div id="cg-history-candidates" class="cg-history-list"></div>
+                </section>
+            </section>
             <div class="card" id="settings-main-card">
                 <form id="settingsForm" method="POST" enctype="multipart/form-data">
                     <section id="settings-general" data-settings-panel="general" role="tabpanel" aria-labelledby="settings-tab-general">

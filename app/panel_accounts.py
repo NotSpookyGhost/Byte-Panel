@@ -22,6 +22,7 @@ PERMISSIONS = {
     'logs.clear': 'Clear log history',
     'players.view': 'View players, IP addresses and history',
     'players.manage': 'Kick, ban and unban players',
+    'players.security': 'Review connection alerts and approve player locations',
     'properties.manage': 'Edit server properties',
     'plugins.view': 'Browse and download plugins/mods and their configs',
     'plugins.manage': 'Upload/delete executable plugins/mods and edit configs (powerful)',
@@ -38,6 +39,7 @@ OWNER_PERMISSIONS = {'server.purge'}
 DEPENDENCIES = {
     'console.command': 'console.view', 'logs.clear': 'logs.view',
     'players.manage': 'players.view', 'plugins.manage': 'plugins.view',
+    'players.security': 'players.view',
     'files.manage': 'files.view',
 }
 

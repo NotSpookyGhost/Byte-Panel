@@ -318,12 +318,15 @@ def _publish(directory, temporary, name, replace):
         _rename_noreplace(directory, temporary, directory, name)
 
 
-def register_file_manager(app, server_dir, data_dir, load_config, get_assets, mutation_guard):
+def register_file_manager(app, server_dir, data_dir, load_config, get_assets, mutation_guard,
+                          path_guard=None, content_guard=None):
     files = Blueprint('files', __name__)
     root, data_root = Path(os.path.abspath(server_dir)), Path(os.path.abspath(data_dir))
     if data_root == root or root in data_root.parents:
         raise ValueError('The server file root must not contain private panel data.')
     lock = threading.RLock()
+    path_guard = path_guard or (lambda relative: None)
+    content_guard = content_guard or (lambda relative, path: None)
 
     class FileRequest(app.request_class):
         @property
@@ -426,6 +429,7 @@ def register_file_manager(app, server_dir, data_dir, load_config, get_assets, mu
             return identifier
 
     def write_file(parent, name, relative, stream, limit, expected=None, operation='upload'):
+        path_guard(relative)
         existing = parent.info(name, missing=True)
         recovery_id = None
         if existing is not None:
@@ -460,6 +464,7 @@ def register_file_manager(app, server_dir, data_dir, load_config, get_assets, mu
                     os.fchmod(target.fileno(), stat.S_IMODE(existing.st_mode) if existing else 0o644)
             if existing is not None:
                 confirmed(_digest(parent, name), expected)
+            content_guard(relative, root.joinpath(*_parts(relative)[:-1], temporary))
             _publish(parent, temporary, name, replace=existing is not None)
             created = False
         finally:
@@ -543,6 +548,7 @@ def register_file_manager(app, server_dir, data_dir, load_config, get_assets, mu
         parts, name = _parts(values.get('path', '')), _name(values.get('name'))
         relative = '/'.join((*parts, name))
         with mutation_guard(), lock, _directory(root, parts) as parent:
+            path_guard(relative)
             if parent.info(name, missing=True) is not None:
                 abort(409, description='A file or folder already uses that name.')
             parent.mkdir(name)
@@ -570,6 +576,9 @@ def register_file_manager(app, server_dir, data_dir, load_config, get_assets, mu
                 destination_parts[:len(source_parts)] == source_parts):
             abort(400, description='Choose a different destination outside the selected folder.')
         with mutation_guard(), lock, _directory(root, source_parts[:-1]) as source:
+            path_guard(source_path)
+            path_guard(destination_path)
+            content_guard(destination_path, root.joinpath(*source_parts))
             with _directory(root, destination_parts[:-1]) as destination:
                 revision = _revision(source, source_parts[-1])
                 confirmed(values.get('revision'), revision)
@@ -593,6 +602,7 @@ def register_file_manager(app, server_dir, data_dir, load_config, get_assets, mu
         if values.get('confirmation') != relative:
             abort(400, description='Confirm deletion by entering the exact relative path.')
         with mutation_guard(), lock, _directory(root, parts[:-1]) as parent:
+            path_guard(relative)
             revision = _revision(parent, parts[-1])
             confirmed(values.get('revision'), revision)
             with recovery('trash', relative, revision, 'delete') as (identifier, saved):

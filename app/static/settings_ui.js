@@ -14,8 +14,8 @@
             if (active && focus) tab.focus();
         });
         panels.forEach(panel => { panel.hidden = panel.dataset.settingsPanel !== key; });
-        form.hidden = ['email', 'operations'].includes(key);
-        document.getElementById('settings-main-card').hidden = key === 'email';
+        form.hidden = ['email', 'security', 'operations'].includes(key);
+        document.getElementById('settings-main-card').hidden = ['email', 'security'].includes(key);
         try { sessionStorage.setItem('byte-panel-settings-section', key); } catch (_) {}
     }
     tabs.forEach((tab, index) => {

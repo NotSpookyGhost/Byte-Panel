@@ -164,6 +164,8 @@
     </script>
     {% include 'panel_access.html' %}
     {% include 'panel_ui.html' %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='connection_guard.css', v=app_version) }}">
+    <script src="{{ url_for('static', filename='connection_guard.js', v=app_version) }}" defer></script>
 </head>
 
 <body class="theme-{{ config.theme }} obsidian page-players " data-accent="{{ config.get('accent', 'lime') }}" data-restricted="{{ 'true' if current_user is defined and current_user and current_user.must_change_password else 'false' }}">
@@ -238,6 +240,25 @@
                     {% endfor %}
                 </tbody>
             </table></div>
+            <section id="cg-player-security" class="card connection-guard" data-permission="players.view" aria-labelledby="cg-events-title">
+                <div class="cg-heading">
+                    <div><h2 id="cg-events-title">Byte Guard</h2><p class="field-help">Attempted logins are separate from online players. An allowed check does not mean the player joined or authenticated successfully.</p></div>
+                    <span id="cg-review-count" class="cg-badge" role="status"></span>
+                </div>
+                <p id="cg-events-message" class="cg-message" role="status">Loading connection history...</p>
+                <form id="cg-filter-form" class="cg-filters">
+                    <div><label for="cg-filter-identity" class="field-label">Player identity</label><input id="cg-filter-identity" type="text" maxlength="96" placeholder="Identity from a connection record"></div>
+                    <div><label for="cg-filter-status" class="field-label">Review status</label><select id="cg-filter-status"><option value="">All connections</option><option value="pending">Pending review</option></select></div>
+                    <button id="cg-filter-submit" type="submit" class="btn btn-outline">Apply filter</button>
+                    <button id="cg-events-refresh" type="button" class="btn btn-outline">Refresh latest</button>
+                </form>
+                <div id="cg-event-list" class="cg-event-list"></div>
+                <div class="cg-actions"><button id="cg-events-next" type="button" class="btn btn-outline" disabled>Older connections</button></div>
+                <section id="cg-profile" class="cg-profile" hidden aria-labelledby="cg-profile-title">
+                    <div class="cg-heading"><h3 id="cg-profile-title">Player protection details</h3><button id="cg-profile-close" type="button" class="btn btn-outline">Close details</button></div>
+                    <div id="cg-profile-body"></div>
+                </section>
+            </section>
         </div>
     </div>
 
