@@ -48,8 +48,8 @@ network firewall or an independent authentication gateway.
 4. Optionally preview existing player history. Review the candidates and confirm
    the one-time import only if those historical connections are trustworthy.
 5. Save **Monitor**, start Minecraft, and confirm companion/provider health.
-   Test with disposable accounts and open **Byte Guard** in the sidebar to review
-   connections on the Players page.
+   Test with disposable accounts and open **Players → Connection history** to
+   review connections. The Players sidebar icon shows Byte Guard in Monitor and Enforce.
 6. After completing the live validation checklist, stop Minecraft, select
    **Enforce**, save, then start and recheck health.
 

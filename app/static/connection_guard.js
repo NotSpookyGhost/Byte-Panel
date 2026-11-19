@@ -99,6 +99,8 @@
     }
     function settingsRender(data, hydrate = true) {
         saved = data;
+        const playersLink = el('players-nav-link');
+        if (playersLink) playersLink.dataset.guardEnabled = String(['monitor', 'enforce'].includes(data.mode));
         if (hydrate) {
             el('cg-mode').value = ['off', 'monitor', 'enforce'].includes(data.mode) ? data.mode : 'off';
             el('cg-radius').value = Number.isFinite(data.radius_km) ? String(data.radius_km) : '250';
@@ -200,7 +202,9 @@
         }
     }
     async function refresh() {
-        if (!visible() || pending || settingsDirty) { schedule(); return; }
+        if (!visible() || pending || settingsDirty || document.activeElement?.closest?.('#cg-event-list')) {
+            schedule(); return;
+        }
         await work(async () => {
             if (settings) {
                 await readSettings(true);
@@ -234,19 +238,24 @@
         return button;
     }
     function isPending(event) { return event.review_status === 'pending' || event.pending_review === true; }
-    function eventRender(event) {
+    function eventRender(event, openAttempts) {
         const item = node('article', undefined, 'cg-event');
         const heading = node('div', undefined, 'cg-heading');
         heading.append(node('strong', text(event.username) || text(event.identity) || 'Unknown player'));
-        const badge = node('span', isPending(event) ? 'Pending review' : label(event.action) || 'Observed', 'cg-badge');
+        const blocked = ['deny', 'reject', 'rejected', 'blocked'].includes(event.action);
+        const outcome = blocked ? 'Blocked' : event.action === 'allow' ? 'Allowed' : label(event.action) || 'Observed';
+        const badge = node('span', outcome + (isPending(event) ? ' · Pending review' : ''), 'cg-badge');
         badge.classList.toggle('pending', isPending(event));
-        badge.classList.toggle('blocked', ['deny', 'reject', 'rejected', 'blocked'].includes(event.action));
+        badge.classList.toggle('blocked', blocked);
         heading.append(badge);
         const location = locationText(event.location || event);
         item.append(heading, node('p', (text(event.ip) || 'Unknown IP') + ' — ' + location),
-            node('p', date(event.created_at || event.timestamp || event.received_at) + ' · ' +
-                (label(event.stage) || 'Connection attempt'), 'cg-event-meta'),
-            node('p', label(event.reason) || 'No additional decision details.'),
+            node('p', [date(event.created_at || event.timestamp || event.received_at),
+                label(event.reason), label(event.stage)].filter(Boolean).join(' · '), 'cg-event-meta'));
+        const details = node('details', undefined, 'cg-event-details');
+        details.dataset.attempt = text(event.attempt_id);
+        details.open = openAttempts.has(details.dataset.attempt);
+        details.append(node('summary', 'Connection details'),
             node('p', 'Joined: ' + (event.joined === true ? 'Yes' : 'Not confirmed') +
                 ' · Authentication: ' + (event.authenticated === true ? 'Confirmed' : 'Not confirmed') +
                 (event.disconnected === true ? ' · Disconnected' : ''), 'cg-event-meta'),
@@ -262,21 +271,24 @@
                 applyFilter();
             }, 'players.view'));
         }
-        if (isPending(event) && event.attempt_id) {
+        if (isPending(event) && event.attempt_id && can('players.security')) {
+            const reviews = node('div', undefined, 'cg-actions');
             [
                 ['Allow next join', 'allow_once', 'Allow one successful join for this identity and IP within 15 minutes? This does not permanently trust the area.'],
                 ['Trust this area', 'trust_area', 'Trust this geographic area for this player? This expands their approved locations. GeoIP is approximate; verify the player independently first.'],
                 ['Keep blocked', 'keep_blocked', 'Resolve this review without granting access? This does not ban the source IP.']
             ].forEach(([label, action, confirmation]) => {
                 const button = actionButton(label, () => review(event, action, confirmation), 'players.security');
-                if (button) actions.append(button);
+                if (button) reviews.append(button);
             });
+            item.append(reviews);
         }
         if (event.ip && event.username) {
             const ban = actionButton('Ban source IP', () => banIP(event), 'players.manage', 'btn btn-stop');
             if (ban) actions.append(ban);
         }
-        item.append(actions);
+        details.append(actions);
+        item.append(details);
         return item;
     }
     async function readEvents(cursor) {
@@ -287,14 +299,19 @@
         const data = await api('/events?' + params.toString());
         if (!pageActive) return;
         const events = Array.isArray(data.events) ? data.events : [];
-        el('cg-event-list').replaceChildren(...events.map(eventRender));
-        if (!events.length) el('cg-event-list').append(node('p', 'No connection records match this filter.', 'field-help'));
+        const list = el('cg-event-list');
+        const openAttempts = new Set(Array.from(list.querySelectorAll('details'))
+            .filter(details => details.open && details.dataset.attempt).map(details => details.dataset.attempt));
+        list.replaceChildren(...events.map(event => eventRender(event, openAttempts)));
+        if (!events.length) list.append(node('p', filter.identity || filter.status ?
+            'No connections match these filters.' : 'No connections recorded yet.', 'field-help'));
         currentCursor = cursor;
         nextCursor = typeof data.next_cursor === 'string' || typeof data.next_cursor === 'number' ? data.next_cursor : null;
         const totalPending = Number.isSafeInteger(data.pending_reviews) ? data.pending_reviews : events.filter(isPending).length;
         el('cg-review-count').textContent = totalPending + (data.pending_reviews === undefined ? ' pending on this page' : ' pending reviews');
         el('cg-review-count').classList.toggle('pending', totalPending > 0);
-        message(events.length + ' connection records shown.' + (cursor ? ' Viewing older connections; automatic refresh is paused.' : ' Latest records refresh every 15 seconds while this page is visible.'));
+        message(events.length + (events.length === 1 ? ' connection' : ' connections') +
+            (cursor ? ' · Older connections' : ' · Latest activity'));
     }
     async function review(event, action, confirmation) {
         if (pending || !can('players.security') || !window.confirm(confirmation)) return;

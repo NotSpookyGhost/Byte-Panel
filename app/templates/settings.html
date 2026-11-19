@@ -51,9 +51,8 @@
             {% from 'byte_guard_brand.html' import guard_mark with context %}
             <section class="card connection-guard" id="settings-security" data-settings-panel="security" role="tabpanel" aria-labelledby="settings-tab-security" hidden>
                 <h2>{{ guard_mark(config.get('theme'), 'logo') }}</h2>
-                <p class="cg-notice">Experimental: live Linux server compatibility still needs validation. Begin with Monitor and test your exact server/AuthMe combination before relying on Enforce. A failed companion plugin is not an independent network gate.</p>
-                <p class="field-help">Compare incoming player connections with their accepted IPs and approved geographic areas before they enter the world. Location is approximate and is not proof of identity. This release supports directly connected Paper and Purpur servers.</p>
-                <p class="cg-notice">Offline-mode servers do not authenticate Minecraft account ownership. AuthMe is required when Byte Guard is in Monitor or Enforce mode, and is strongly recommended even when the guard is off.</p>
+                <p class="field-help">Byte Guard checks incoming IPs and approximate locations on directly connected Paper and Purpur servers.</p>
+                <p class="cg-notice">Byte Guard is experimental. Start in Monitor and verify the companion is working on your server before choosing Enforce.</p>
                 <p id="cg-settings-message" class="cg-message" role="status">Loading Byte Guard settings...</p>
                 <form id="cg-settings-form" autocomplete="off" data-permission="settings.manage">
                     <fieldset id="cg-settings-fields" disabled>
@@ -74,9 +73,9 @@
                             </div>
                         </div>
                         <p id="cg-identity-mode" class="field-help"></p>
-                        <p class="field-help">Stop Minecraft before changing the guard mode. Prepare the database and, for offline mode, AuthMe below before enabling protection. Use Monitor to review expected decisions before switching to Enforce.</p>
-                        <h3>Your MaxMind GeoLite2 City account</h3>
-                        <p class="field-help">Enter your own free MaxMind account credentials. They download a local City database; player IPs are looked up locally, not sent to a web lookup service. No shared credentials are built into the image.</p>
+                        <p class="field-help">Stop Minecraft before saving. Enabling protection requires a current City database. AuthMe is required on offline-mode servers.</p>
+                        <h3>MaxMind GeoLite2 City</h3>
+                        <p class="field-help">Your account downloads the database. Byte Guard looks up player addresses locally.</p>
                         <div class="cg-grid">
                             <div>
                                 <label for="cg-account-id" class="field-label">MaxMind account ID</label>
@@ -89,7 +88,7 @@
                                 <label class="cg-check" for="cg-remove-key"><input type="checkbox" id="cg-remove-key"> Remove saved license key</label>
                             </div>
                         </div>
-                        <p class="field-help">Credentials stay in private panel data and are excluded from Minecraft backups. Updates are checked daily. An absent or stale database cannot approve a returning player's unfamiliar IP.</p>
+                        <p class="field-help">Credentials are stored privately outside Minecraft backups. Byte Guard checks for database updates daily.</p>
                         <p id="cg-unsaved" class="field-help" hidden>Unsaved security changes. Save before downloading the database or preparing authentication.</p>
                         <div class="cg-actions">
                             <button id="cg-save" type="submit" class="btn btn-primary">Save and validate</button>
@@ -105,23 +104,23 @@
                 <section class="cg-section">
                     <h3>Offline-mode authentication</h3>
                     <div id="cg-auth-status" class="cg-detail" aria-live="polite"></div>
-                    <p class="field-help">The panel only prepares a verified compatible AuthMe release while Minecraft is stopped. Existing accounts and configuration are preserved. Another authentication plugin requires manual review; the panel will not install a competing provider or silently change your authentication setup.</p>
+                    <p class="field-help">Use password authentication for offline servers even when Guard is Off. Stop Minecraft to install AuthMe or approve a repair. Review any other authentication provider before installing.</p>
                     <div class="cg-actions">
                         <button id="cg-auth-check" type="button" class="btn btn-outline" data-permission="settings.manage">Check authentication</button>
                         <button id="cg-auth-install" type="button" class="btn btn-outline" data-permission="settings.manage" disabled>Install AuthMe</button>
                         <button id="cg-auth-repair" type="button" class="btn btn-outline" data-permission="settings.manage" disabled>Repair managed AuthMe</button>
                     </div>
                 </section>
-                <section class="cg-section">
-                    <h3>Existing player history</h3>
-                    <p class="field-help">Preview the first recorded IPs before importing them as reference locations. Confirm only if this history belongs to the current server. Historical IP locations are estimates, not proof of who owned the account. Invalid or ambiguous records are skipped.</p>
+                <details class="cg-section">
+                    <summary>Import existing player history</summary>
+                    <p class="field-help">Preview each player's earliest recorded IP. Confirm the history belongs to this server before using those estimated locations as references.</p>
                     <div class="cg-actions">
                         <button id="cg-history-preview" type="button" class="btn btn-outline" data-permission="settings.manage">Preview player history</button>
                         <button id="cg-history-import" type="button" class="btn btn-outline" data-permission="settings.manage" disabled>Confirm history belongs to this server</button>
                     </div>
                     <div id="cg-history-summary" class="field-help" role="status"></div>
                     <div id="cg-history-candidates" class="cg-history-list"></div>
-                </section>
+                </details>
             </section>
             <div class="card" id="settings-main-card">
                 <form id="settingsForm" method="POST" enctype="multipart/form-data">

@@ -158,6 +158,7 @@ class GuardRuntime:
         self.token_scope, self.token = None, None
         self._token()
         self.register_routes()
+        self.app.add_template_global(self.sidebar_enabled, 'byte_guard_enabled')
 
     def effective_config(self):
         config = dict(self.load_config())
@@ -191,6 +192,13 @@ class GuardRuntime:
 
     def enabled(self):
         return self.guard.config().get('mode', 'off') != 'off'
+
+    def sidebar_enabled(self):
+        try:
+            return self.guard.display_mode() in ('monitor', 'enforce')
+        except (OSError, sqlite3.Error, ValueError):
+            # Navigation stays usable if Guard's private storage needs attention.
+            return False
 
     def auth_status(self, identity_mode=None, enabled=None):
         result = self.auth.status()

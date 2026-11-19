@@ -13,10 +13,10 @@
         {% for path, label, glyph, permission in [('/overview','Overview','grid',''),('/console','Console','terminal','console.view'),('/logs','Logs','logs','logs.view'),('/players','Players','players','players.view'),('/mods' if modded else '/plugins','Mods' if modded else 'Plugins','plugins','plugins.view'),('/files','Files','folder','files.view'),('/properties','Properties','sliders','properties.manage'),('/backups','Backups','backup','backups')] %}
         {% set allowed = can is not defined or not permission or (permission == 'backups' and (can('backups.create') or can('backups.restore'))) or (permission != 'backups' and can(permission)) %}
         {% if allowed and (path not in ['/plugins','/mods'] or (config.get('server_type') or '') | lower in ['paper','purpur','forge','fabric']) %}
-        <a href="{{ path }}" class="nav-link{% if request.path == path %} active{% endif %}"{% if request.path == path %} aria-current="page"{% endif %}>{{ icon(glyph) }}<span>{{ label }}</span></a>
-        {% if path == '/players' %}
-        <a href="/players#cg-player-security" class="nav-link" data-byte-guard-link>{{ guard_mark(config.get('theme')) }}<span>Byte Guard</span></a>
-        {% endif %}
+        <a href="{{ path }}" class="nav-link{% if request.path == path %} active{% endif %}"{% if request.path == path %} aria-current="page"{% endif %}
+           {% if path == '/players' %}id="players-nav-link" data-guard-enabled="{{ 'true' if byte_guard_enabled() else 'false' }}"{% endif %}>
+            {{ icon(glyph) }}{% if path == '/players' %}{{ guard_mark(config.get('theme')) }}{% endif %}<span>{{ label }}</span>
+        </a>
         {% endif %}
         {% endfor %}
         {% if config.get('bluemap_enabled') %}<a href="/map/" class="nav-link" target="_blank" rel="noopener">{{ icon('map') }}<span>Map</span></a>{% endif %}

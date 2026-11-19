@@ -244,6 +244,15 @@ class ConnectionGuard:
         with self._transaction() as conn:
             return dict(**self._policy(conn), **self.geoip.credentials())
 
+    def display_mode(self):
+        """Read the current server's mode without locking out writers or changing scope."""
+        ordinary_file(self.database_path)
+        uri = self.database_path.as_uri() + '?mode=ro'
+        with closing(sqlite3.connect(uri, uri=True, timeout=0.1)) as conn:
+            values = {key: json.loads(value) for key, value in conn.execute(
+                "SELECT key,value FROM metadata WHERE key IN ('mode','scope')")}
+        return values.get('mode') if values.get('scope') == str(self.scope_provider()) else 'off'
+
     def save_settings(self, payload, *, validate_credentials=False):
         if not isinstance(payload, dict):
             raise ValueError('Settings must be an object.')

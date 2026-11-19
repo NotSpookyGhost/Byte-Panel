@@ -67,6 +67,22 @@ class GuardIntegrationTests(unittest.TestCase):
             target.writestr('plugin.yml', 'name: ' + name + '\nversion: ' + version + '\nmain: example.Test\n')
         return path
 
+    def test_players_navigation_follows_saved_guard_mode_and_permissions(self):
+        viewer = self.user('guard-nav-viewer', ['players.view'])
+        for mode in ('off', 'monitor', 'enforce', 'off'):
+            self.guard.save_settings({'mode': mode})
+            page = viewer.get('/players').get_data(as_text=True)
+            nav = page.split('aria-label="Panel navigation">')[1].split('</nav>')[0]
+            self.assertEqual(1, nav.count('href="/players"'))
+            self.assertNotIn('/players#cg-player-security', nav)
+            self.assertIn('data-guard-enabled="' + ('false' if mode == 'off' else 'true') + '"', nav)
+        restricted = self.user('guard-nav-console', ['console.view'])
+        self.assertNotIn('id="players-nav-link"', restricted.get('/console').get_data(as_text=True))
+        with patch.object(self.runtime.guard, 'display_mode', side_effect=sqlite3.OperationalError('busy')):
+            response = viewer.get('/players')
+            self.assertEqual(200, response.status_code)
+            self.assertIn('data-guard-enabled="false"', response.get_data(as_text=True))
+
     def test_settings_and_history_require_settings_permission(self):
         endpoints = ('settings', 'auth', 'history/preview')
         viewer = self.user('player-viewer', ['players.view'])

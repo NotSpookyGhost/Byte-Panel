@@ -175,8 +175,8 @@
     <div class="main-layout">
         {% include 'panel_header.html' %}
         <div class="main-content" id="panel-content" tabindex="-1">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <div style="display: flex; align-items: center; gap: 20px;">
+            <div class="cg-roster-toolbar">
+                <div class="cg-roster-search">
                     <div class="filter-group" style="display: flex; gap: 8px;">
                         <button class="btn btn-outline btn-sm active" onclick="setFilter('all', this)">All</button>
                         <button class="btn btn-outline btn-sm" onclick="setFilter('online', this)">Online</button>
@@ -186,6 +186,7 @@
                     <input type="text" id="playerSearch" onkeyup="searchPlayers()" placeholder="Search by username..."
                         style="padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-dark); color: var(--text-main); width: 250px; font-size: 0.9rem;">
                 </div>
+                <a href="#cg-player-security" class="btn btn-outline btn-sm">Connection history</a>
             </div>
 
             <div class="table-scroll"><table class="roster-table" id="rosterTable">
@@ -247,18 +248,16 @@
             {% from 'byte_guard_brand.html' import guard_mark with context %}
             <section id="cg-player-security" class="card connection-guard" data-permission="players.view" aria-labelledby="cg-events-title" tabindex="-1">
                 <div class="cg-heading">
-                    <div><h2 id="cg-events-title">{{ guard_mark(config.get('theme'), 'logo') }}</h2><p class="field-help">Attempted logins are separate from online players. An allowed check does not mean the player joined or authenticated successfully.</p></div>
+                    <h2 id="cg-events-title">{{ guard_mark(config.get('theme'), 'logo') }}</h2>
                     <span id="cg-review-count" class="cg-badge" role="status"></span>
                 </div>
                 <p id="cg-events-message" class="cg-message" role="status">Loading connection history...</p>
                 <form id="cg-filter-form" class="cg-filters">
-                    <div><label for="cg-filter-identity" class="field-label">Player identity</label><input id="cg-filter-identity" type="text" maxlength="96" placeholder="Identity from a connection record"></div>
+                    <div><label for="cg-filter-identity" class="field-label">Player identity</label><input id="cg-filter-identity" type="text" maxlength="96" placeholder="Identity from connection details"></div>
                     <div><label for="cg-filter-status" class="field-label">Review status</label><select id="cg-filter-status"><option value="">All connections</option><option value="pending">Pending review</option></select></div>
                     <button id="cg-filter-submit" type="submit" class="btn btn-outline">Apply filter</button>
                     <button id="cg-events-refresh" type="button" class="btn btn-outline">Refresh latest</button>
                 </form>
-                <div id="cg-event-list" class="cg-event-list"></div>
-                <div class="cg-actions"><button id="cg-events-next" type="button" class="btn btn-outline" disabled>Older connections</button></div>
                 <section id="cg-profile" class="cg-profile" hidden aria-labelledby="cg-profile-title" tabindex="-1">
                     <div class="cg-heading"><h3 id="cg-profile-title">Player protection details</h3><button id="cg-profile-close" type="button" class="btn btn-outline">Close details</button></div>
                     <h4>Safe IP addresses</h4>
@@ -272,6 +271,8 @@
                     </form>
                     <div id="cg-profile-body"></div>
                 </section>
+                <div id="cg-event-list" class="cg-event-list"></div>
+                <div class="cg-actions"><button id="cg-events-next" type="button" class="btn btn-outline" disabled>Older connections</button></div>
             </section>
         </div>
     </div>

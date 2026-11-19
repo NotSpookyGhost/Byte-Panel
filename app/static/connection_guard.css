@@ -19,6 +19,13 @@
 .cg-heading h2, .cg-heading h3 { margin-bottom: 8px; }
 .connection-guard .byte-guard-logo { display: block; width: 176px; max-width: 100%; height: auto; }
 #cg-player-security { scroll-margin-top: 16px; }
+.cg-roster-toolbar, .cg-roster-search { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.cg-roster-toolbar { justify-content: space-between; margin-bottom: 16px; }
+.cg-roster-search { min-width: 0; }
+.cg-roster-search input { max-width: 100%; }
+#cg-events-message:not(.error) { border: 0; padding: 0; color: var(--text-muted); }
+.cg-event-details { margin-top: 10px; }
+.cg-event-details summary, .cg-section > summary { cursor: pointer; font-weight: 600; }
 .theme-light .connection-guard .cg-message.error, .theme-light .connection-guard .cg-badge.blocked { color: #a82d39; }
 .theme-light .connection-guard .cg-warning, .theme-light .connection-guard .cg-badge.pending { color: #785210; }
 .cg-actions { margin-top: 16px; }

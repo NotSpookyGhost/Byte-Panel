@@ -36,7 +36,6 @@
         if (toggle) toggle.addEventListener('click', () => setOpen(!document.body.classList.contains('nav-open')));
         if (close) close.addEventListener('click', () => { setOpen(false); if (toggle) toggle.focus(); });
         if (overlay) overlay.addEventListener('click', () => { setOpen(false); if (toggle) toggle.focus(); });
-        sidebar.querySelector('[data-byte-guard-link]')?.addEventListener('click', () => setOpen(false));
         document.addEventListener('keydown', event => {
             if (!document.body.classList.contains('nav-open')) return;
             if (event.key === 'Escape') { setOpen(false); if (toggle) toggle.focus(); }

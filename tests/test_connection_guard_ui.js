@@ -285,15 +285,22 @@ async function setup({kind = 'settings', initial, permissions = ['settings.manag
     assert.equal(player.buttons().length, 6);
     assert.match(player.el('event-list').textContent, /pre login/);
     assert.match(player.el('review-count').textContent, /1 pending/);
+    const details = player.el('event-list').querySelectorAll('details')[0];
+    assert.equal(details.open, false);
+    assert.ok(!details.querySelectorAll('button').includes(player.button('Allow next join')));
+    details.open = true;
+    player.queue.push(reply(events()));
+    await player.timer();
+    assert.equal(player.el('event-list').querySelectorAll('details')[0].open, true);
     player.confirmations.push(false);
     player.button('Allow next join').click();
     await settle();
-    assert.equal(player.calls.length, 1);
+    assert.equal(player.calls.length, 2);
     player.queue.push(reply({status: 'success'}), reply(events({events: []})));
     player.button('Allow next join').click();
     await settle();
-    assert.equal(player.calls[1].url, '/api/connection-security/reviews/attempt-1');
-    assert.deepEqual(JSON.parse(player.calls[1].options.body), {action: 'allow_once'});
+    assert.equal(player.calls[2].url, '/api/connection-security/reviews/attempt-1');
+    assert.deepEqual(JSON.parse(player.calls[2].options.body), {action: 'allow_once'});
     assert.match(player.prompts[1], /15 minutes/);
     assert.match(player.el('events-message').textContent, /must reconnect/);
 
