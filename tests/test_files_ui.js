@@ -15,7 +15,7 @@ const fileEntry = (name, editable = true) => ({
 });
 const folderEntry = name => ({name: name.split('/').at(-1), path: name, kind: 'folder', size: 0, editable: false});
 
-async function setup({manage = true, initialPath = '', extraEntries = [], responses = {}} = {}) {
+async function setup({manage = true, initialPath = '', extraEntries = [], responses = {}, highlight = false} = {}) {
     const document = createDocument();
     // Fail loudly if a future renderer interprets a filename or API message as HTML.
     const guarded = new WeakSet();
@@ -40,6 +40,23 @@ async function setup({manage = true, initialPath = '', extraEntries = [], respon
         'files-breadcrumbs', 'files-upload-form', 'files-upload', 'files-upload-button', 'files-new-folder',
         'files-new-file', 'files-refresh'];
     for (const id of ids) manager.append(byId(id));
+    const editor = byId('files-content');
+    const syntaxCalls = [], focusCalls = [];
+    // Reproduce native .value assignment: newlines normalize and the caret ends at EOF.
+    let value = '';
+    Object.defineProperty(editor, 'value', {
+        get: () => value,
+        set: content => {
+            value = String(content).replace(/\r\n?/g, '\n');
+            editor.selectionStart = editor.selectionEnd = value.length;
+        },
+    });
+    editor.scrollTop = editor.scrollLeft = 0;
+    editor.focus = options => {
+        focusCalls.push({preventScroll: options && options.preventScroll, disabled: editor.disabled});
+        document.activeElement = editor;
+        if (!options || !options.preventScroll) editor.scrollTop = 99999;
+    };
     for (const id of ['files-save', 'files-reload', 'files-close', 'files-upload', 'files-upload-button',
         'files-new-folder', 'files-new-file', 'files-refresh']) byId(id).className = 'file-interactive';
     for (const id of ['files-save', 'files-new-folder', 'files-new-file', 'files-upload-form']) {
@@ -66,6 +83,13 @@ async function setup({manage = true, initialPath = '', extraEntries = [], respon
         }},
         addEventListener: (type, action) => { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(action); },
     };
+    if (highlight) window.PanelConfigEditor = {attach(node) {
+        assert.equal(node, editor);
+        return {
+            setFile: filename => syntaxCalls.push({filename, value: editor.value}),
+            syncScroll: () => syntaxCalls.push({scrollTop: editor.scrollTop, scrollLeft: editor.scrollLeft}),
+        };
+    }};
     class FormData {
         constructor() { this.values = new Map(); }
         append(name, value) { this.values.set(name, value); }
@@ -129,6 +153,7 @@ async function setup({manage = true, initialPath = '', extraEntries = [], respon
     const row = name => byId('files-list').children.find(node => node.dataset.path === name);
     const action = (name, label) => row(name).querySelectorAll('button').find(node => node.textContent === label);
     return {byId, calls, confirmations, confirmAnswers, prompts, promptAnswers, history, row, action, queues,
+        contents, editor, syntaxCalls, focusCalls,
         async open(name) { row(name).children[0].children[0].click(); await settle(); },
         async click(id) { byId(id).click(); await settle(); },
         draft(value) { byId('files-content').value = value; byId('files-content').fire('input'); },
@@ -348,6 +373,84 @@ test('initial folder and breadcrumbs work, while busy operations prevent duplica
     assert.equal(ui.history.at(-1), '/files');
     assert.ok(ui.row('world'));
     assert.ok(ui.calls.every(call => call.options.credentials === 'same-origin' && call.options.cache === 'no-store'));
+});
+
+test('long files open, switch, reload and close at the top with or without highlighting', async () => {
+    for (const highlight of [false, true]) {
+        const ui = await setup({highlight});
+        const longContent = '# first line\r\n' + 'key: true\r\n'.repeat(500) + 'last: value\r\n';
+        ui.contents.set('config.txt', longContent);
+        ui.editor.scrollTop = 7000; ui.editor.scrollLeft = 300;
+        await ui.open('config.txt');
+        const atTop = () => assert.deepEqual(
+            [ui.editor.selectionStart, ui.editor.selectionEnd, ui.editor.scrollTop, ui.editor.scrollLeft],
+            [0, 0, 0, 0]);
+        atTop();
+        assert.equal(ui.editor.value, longContent.replace(/\r\n/g, '\n'));
+        if (highlight) {
+            assert.equal(ui.syntaxCalls.find(call => call.filename).filename, 'config.txt');
+            assert.equal(ui.syntaxCalls.find(call => call.filename).value, ui.editor.value);
+            assert.deepEqual(ui.syntaxCalls.at(-1), {scrollTop: 0, scrollLeft: 0});
+        }
+        ui.editor.setSelectionRange(30, 40); ui.editor.scrollTop = 4000; ui.editor.scrollLeft = 70;
+        await ui.click('files-reload');
+        atTop();
+        ui.editor.setSelectionRange(4, 8); ui.editor.scrollTop = 1000; ui.editor.scrollLeft = 90;
+        await ui.open('second.txt');
+        atTop();
+        if (highlight) assert.equal(ui.syntaxCalls.filter(call => call.filename).at(-1).filename, 'second.txt');
+        ui.editor.scrollTop = 400; ui.editor.scrollLeft = 20;
+        await ui.click('files-close');
+        atTop();
+        assert.equal(ui.editor.value, '');
+        assert.equal(ui.editor.disabled, true);
+        if (highlight) assert.equal(ui.syntaxCalls.filter(call => 'filename' in call).at(-1).filename, '');
+    }
+});
+
+test('saving, cancelled navigation and failed reload preserve caret, scroll and syntax selection', async () => {
+    const ui = await setup({highlight: true});
+    await ui.open('config.txt'); ui.draft('draft: retain this\n');
+    ui.editor.setSelectionRange(3, 8); ui.editor.scrollTop = 420; ui.editor.scrollLeft = 51;
+    const view = () => [ui.editor.selectionStart, ui.editor.selectionEnd, ui.editor.scrollTop, ui.editor.scrollLeft];
+    const expectedView = view(), syntaxCount = ui.syntaxCalls.length;
+    await ui.open('second.txt');
+    await ui.click('files-reload');
+    await ui.click('files-close');
+    assert.deepEqual(view(), expectedView);
+    assert.equal(ui.editor.value, 'draft: retain this\n');
+    ui.queues.set('PUT /api/files/file', [{status: 409, data: {error: 'Concurrent modification.'}}]);
+    await ui.click('files-save');
+    assert.deepEqual(view(), expectedView);
+    assert.equal(ui.byId('files-editor-state').textContent, 'Unsaved changes');
+    await ui.click('files-save');
+    assert.deepEqual(view(), expectedView);
+    assert.equal(ui.byId('files-editor-state').textContent, 'Saved');
+    ui.queues.set('GET /api/files/file', [{status: 503, data: {error: 'File unavailable.'}}]);
+    await ui.click('files-reload');
+    assert.deepEqual(view(), expectedView);
+    assert.equal(ui.syntaxCalls.length, syntaxCount);
+    assert.equal(ui.editor.value, 'draft: retain this\n');
+    assert.match(ui.byId('files-message').textContent, /File unavailable/);
+});
+
+test('highlighting does not alter CRLF save bytes or readonly search selections', async () => {
+    const ui = await setup({highlight: true});
+    ui.contents.set('config.txt', 'key=true\r\nkey=false\r\n');
+    await ui.open('config.txt');
+    ui.draft(ui.editor.value + 'third=true\n');
+    await ui.click('files-save');
+    assert.equal(ui.calls.find(call => call.options.method === 'PUT').body.content,
+        'key=true\r\nkey=false\r\nthird=true\r\n');
+    const viewer = await setup({highlight: true, manage: false});
+    await viewer.open('config.txt');
+    viewer.byId('files-search').value = 'key'; viewer.byId('files-search').fire('input');
+    await viewer.click('files-search-next');
+    assert.deepEqual([viewer.editor.selectionStart, viewer.editor.selectionEnd], [0, 3]);
+    assert.equal(viewer.editor.readOnly, true);
+    assert.equal(viewer.byId('files-save').disabled, true);
+    assert.deepEqual(viewer.focusCalls.at(-1), {preventScroll: true, disabled: false});
+    assert.equal(viewer.calls.some(call => call.options.method), false);
 });
 
 (async () => {

@@ -88,6 +88,10 @@ checked on upload, but you must still select a compatible server-side build.
 3. Open supported text configs (up to **1 MiB**), use **Find in config** or
    Ctrl/Cmd+F, edit and save.
 
+Both config editors use syntax colors for common config formats and open/reload
+files at the top. Highlighting is local to your browser, does not change the
+saved text and is not a syntax validator.
+
 For LuckPerms, upload `preset.json.gz` into `plugins/LuckPerms`, then run
 `lp import preset.json.gz` in the console. Uploading a file does not import or
 unpack it automatically.

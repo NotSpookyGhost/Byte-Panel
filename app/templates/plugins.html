@@ -8,9 +8,11 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='plugins.css', v=app_version) }}">
     <link rel="icon" href="{{ '/branding-assets/favicon.ico' if has_custom.favicon else url_for('static', filename='bytedev_logo.png') }}">
     <script src="{{ url_for('static', filename='plugin_search.js', v=app_version) }}" defer></script>
+    <script src="{{ url_for('static', filename='config_editor.js', v=app_version) }}" defer></script>
     <script src="{{ url_for('static', filename='plugins.js', v=app_version) }}" defer></script>
     {% include 'panel_access.html' %}
     {% include 'panel_ui.html' %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='config_editor.css', v=app_version) }}">
 </head>
 <body class="theme-{{ config.theme }} obsidian page-plugins plugins-page" data-accent="{{ config.get('accent', 'lime') }}" data-restricted="{{ 'true' if current_user is defined and current_user and current_user.must_change_password else 'false' }}">
     {% set page_title = addon_title %}

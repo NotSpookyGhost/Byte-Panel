@@ -1,0 +1,117 @@
+/* Native textarea remains the only interactive/accessibility editing surface. */
+.panel-config-editor {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    isolation: isolate;
+}
+.panel-config-editor .panel-config-editor-input {
+    position: relative;
+    z-index: 1;
+    grid-area: 1 / 1;
+    font: 14px/1.6 ui-monospace, Consolas, monospace;
+    white-space: pre !important;
+    overflow-wrap: normal !important;
+    word-break: normal !important;
+    overflow: auto;
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "calt" 0;
+    font-kerning: none;
+}
+/* Override the older plugin-only fixed dark editor colors, including fallback/IME. */
+.obsidian .panel-config-editor #plugin-content {
+    color: var(--text-main);
+    background: var(--bg-secondary);
+    font: 14px/1.6 ui-monospace, Consolas, monospace;
+}
+.panel-config-editor .panel-config-editor-highlight {
+    display: none;
+    position: absolute;
+    z-index: 0;
+    box-sizing: border-box;
+    margin: 0;
+    border: 0;
+    border-radius: 4px;
+    overflow: hidden;
+    white-space: pre;
+    overflow-wrap: normal;
+    word-break: normal;
+    pointer-events: none;
+    user-select: none;
+    color: var(--text-main, var(--config-editor-text));
+    background: var(--bg-secondary, var(--config-editor-background));
+}
+.panel-config-editor .panel-config-editor-code {
+    display: block;
+    min-height: 100%;
+    width: max-content;
+    min-width: 100%;
+    padding: 0;
+    border: 0;
+    margin: 0;
+    font: inherit;
+    letter-spacing: inherit;
+    word-spacing: inherit;
+    white-space: inherit;
+    color: inherit;
+    background: none;
+    tab-size: inherit;
+}
+/* Preserve the final empty line without adding characters to the source/DOM. */
+.panel-config-editor-code::after { content: "\200b"; }
+.panel-config-editor.is-highlighted .panel-config-editor-highlight { display: block; }
+.panel-config-editor.is-highlighted .panel-config-editor-input {
+    color: transparent !important;
+    background: transparent !important;
+    caret-color: var(--text-main, var(--config-editor-text));
+}
+.panel-config-editor .panel-config-editor-input::selection {
+    color: #10151c;
+    background: #b3d4fc;
+}
+.panel-config-editor .panel-config-editor-input:disabled + .panel-config-editor-highlight { opacity: .6; }
+.panel-config-editor-status {
+    grid-area: 2 / 1;
+    margin-top: 6px;
+    color: var(--text-muted, #a6a6a6);
+    font: 12px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+.panel-config-editor-status[hidden] { display: none; }
+.panel-config-editor .config-token-comment { color: #94a88d; }
+.panel-config-editor .config-token-key { color: #8bcff0; }
+.panel-config-editor .config-token-string { color: #b9dc94; }
+.panel-config-editor .config-token-number { color: #edbd85; }
+.panel-config-editor .config-token-literal { color: #d4b0f5; }
+.panel-config-editor .config-token-punctuation { color: #c0cad7; }
+.panel-config-editor .config-token-section { color: #a0dce2; }
+.panel-config-editor .config-token-anchor { color: #e8c37e; }
+.panel-config-editor .config-token-tag { color: #89c6ef; }
+.panel-config-editor .config-token-attribute { color: #e8c37e; }
+.panel-config-editor .config-token-entity { color: #d4b0f5; }
+.theme-light .panel-config-editor .config-token-comment { color: #526447; }
+.theme-light .panel-config-editor .config-token-key { color: #075c82; }
+.theme-light .panel-config-editor .config-token-string { color: #38701a; }
+.theme-light .panel-config-editor .config-token-number { color: #85481a; }
+.theme-light .panel-config-editor .config-token-literal { color: #7043a3; }
+.theme-light .panel-config-editor .config-token-punctuation { color: #455363; }
+.theme-light .panel-config-editor .config-token-section { color: #256c76; }
+.theme-light .panel-config-editor .config-token-anchor { color: #795214; }
+.theme-light .panel-config-editor .config-token-tag { color: #075c82; }
+.theme-light .panel-config-editor .config-token-attribute { color: #795214; }
+.theme-light .panel-config-editor .config-token-entity { color: #7043a3; }
+@media (forced-colors: active) {
+    .panel-config-editor .panel-config-editor-highlight { display: none !important; }
+    .panel-config-editor.is-highlighted .panel-config-editor-input {
+        color: CanvasText !important;
+        background: Canvas !important;
+        caret-color: CanvasText;
+    }
+    .panel-config-editor .panel-config-editor-input::selection {
+        color: HighlightText;
+        background: Highlight;
+    }
+}
+@media print {
+    .panel-config-editor .panel-config-editor-highlight { display: none !important; }
+    .panel-config-editor.is-highlighted .panel-config-editor-input { color: inherit !important; background: transparent !important; }
+}

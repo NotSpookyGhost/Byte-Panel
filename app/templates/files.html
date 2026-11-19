@@ -9,9 +9,11 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='files.css', v=app_version) }}">
     <link rel="icon" href="{{ '/branding-assets/favicon.ico' if has_custom.favicon else url_for('static', filename='bytedev_logo.png') }}">
     <script src="{{ url_for('static', filename='plugin_search.js', v=app_version) }}" defer></script>
+    <script src="{{ url_for('static', filename='config_editor.js', v=app_version) }}" defer></script>
     <script src="{{ url_for('static', filename='files.js', v=app_version) }}" defer></script>
     {% include 'panel_access.html' %}
     {% include 'panel_ui.html' %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='config_editor.css', v=app_version) }}">
 </head>
 <body class="theme-{{ config.theme }} obsidian plugins-page page-files" data-accent="{{ config.get('accent', 'lime') }}">
     {% set page_title = 'Files' %}
@@ -70,7 +72,7 @@
                             <span id="files-search-status" class="plugins-hint" role="status"></span>
                         </div>
                     </div>
-                    <textarea id="files-content" aria-label="File contents" spellcheck="false" disabled></textarea>
+                    <textarea id="files-content" aria-label="File contents" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" disabled></textarea>
                     <div class="plugins-editor-actions">
                         <button id="files-close" class="btn btn-outline file-interactive" type="button">Close</button>
                         <button id="files-reload" class="btn btn-outline file-interactive" type="button" disabled>Reload</button>

@@ -4,6 +4,7 @@
     const byId = id => document.getElementById(id);
     const manager = byId('file-manager');
     const editor = byId('files-content');
+    const syntax = window.PanelConfigEditor ? window.PanelConfigEditor.attach(editor) : null;
     const notice = byId('files-message');
     const list = byId('files-list');
     const canManage = !window.panelCan || window.panelCan('files.manage');
@@ -52,6 +53,8 @@
     function discard() { return !dirty() || window.confirm('Discard unsaved file changes?'); }
     function clearEditor() {
         selected = null; original = ''; revision = ''; editor.value = '';
+        if (syntax) syntax.setFile('');
+        resetPosition();
         byId('files-editor-path').textContent = ''; search.refresh(); controls();
     }
     function formatSize(bytes) {
@@ -125,11 +128,19 @@
         if (folder) url.searchParams.set('path', folder); else url.searchParams.delete('path');
         window.history.replaceState(null, '', url.pathname + url.search);
     }
+    function resetPosition() {
+        editor.setSelectionRange(0, 0);
+        editor.scrollTop = 0;
+        editor.scrollLeft = 0;
+        if (syntax) syntax.syncScroll();
+    }
     async function openFile(path) {
         if (!discard()) return;
         const data = await api('/api/files/file?path=' + encodeURIComponent(path));
         selected = data.path; lineEnding = data.content.includes('\r\n') ? '\r\n' : '\n';
         editor.value = data.content; original = editor.value; revision = data.revision;
+        if (syntax) syntax.setFile(selected);
+        resetPosition();
         byId('files-editor-path').textContent = 'server/' + selected; search.refresh(); controls();
     }
     function recovery(data) {

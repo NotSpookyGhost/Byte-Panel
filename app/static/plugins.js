@@ -5,6 +5,7 @@
     const addonLabel = addonKind === 'mod' ? 'Mod' : 'Plugin';
     const rootName = manager.dataset.rootName === 'mods' ? 'mods' : 'plugins';
     const editor = document.getElementById('plugin-content');
+    const syntax = window.PanelConfigEditor ? window.PanelConfigEditor.attach(editor) : null;
     const list = document.getElementById('plugin-file-list');
     const notice = document.getElementById('plugins-message');
     const stateLabel = document.getElementById('editor-state');
@@ -73,6 +74,8 @@
         original = '';
         revision = '';
         editor.value = '';
+        if (syntax) syntax.setFile('');
+        resetPosition();
         search.refresh();
         document.getElementById('editor-path').textContent = 'Select a text config from the file list.';
     }
@@ -189,17 +192,30 @@
         lineEnding = result.content.includes('\r\n') ? '\r\n' : '\n';
         editor.value = result.content;
         original = editor.value;
+        if (syntax) syntax.setFile(selected);
+        resetPosition();
         search.refresh();
         document.getElementById('editor-path').textContent = rootName + '/' + selected;
     }
+    function resetPosition(focus = false) {
+        // Setting .value moves the native caret to EOF. Reset it before focusing,
+        // otherwise the browser scrolls a newly opened config to its last line.
+        editor.setSelectionRange(0, 0);
+        if (focus) editor.focus({preventScroll: true});
+        editor.scrollTop = 0;
+        editor.scrollLeft = 0;
+        if (syntax) syntax.syncScroll();
+    }
     function openFile(path) {
         if (busy || !confirmDiscard()) return;
+        let loaded = false;
         run(async () => {
             await loadFile(path);
+            loaded = true;
             notice.hidden = true;
             const editorPanel = document.querySelector('.plugins-editor');
             if (editorPanel && window.matchMedia('(max-width: 1199px)').matches) editorPanel.scrollIntoView({block:'start', behavior:'auto'});
-        }).then(() => { if (selected === path) editor.focus(); });
+        }).then(() => { if (loaded && selected === path) resetPosition(true); });
     }
     const backToFiles = document.getElementById('back-to-files');
     if (backToFiles) backToFiles.addEventListener('click', () => {

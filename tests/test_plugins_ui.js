@@ -8,7 +8,8 @@ const PluginConfigSearch = require('../app/static/plugin_search.js');
 const source = fs.readFileSync(path.join(__dirname, '../app/static/plugins.js'), 'utf8');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-async function setup({manage = true, confirm = true, failDelete = false, uploadResponses = [], failedFolder = null, addonKind = 'plugin'} = {}) {
+async function setup({manage = true, confirm = true, failDelete = false, uploadResponses = [], failedFolder = null,
+    addonKind = 'plugin', highlight = false, fileResponses = [], saveResponses = []} = {}) {
     const document = createDocument();
     const manager = document.getElementById('plugin-manager');
     manager.dataset.csrfToken = 'plugin-csrf-test';
@@ -20,6 +21,24 @@ async function setup({manage = true, confirm = true, failDelete = false, uploadR
         'config-search', 'search-previous', 'search-next', 'search-match-case', 'search-status', 'plugin-breadcrumbs',
         'plugin-list-status', 'editor-path', 'refresh-files', 'plugin-upload-form', 'plugin-upload', 'plugin-upload-destination'];
     for (const id of ids) manager.append(document.getElementById(id));
+    const editor = document.getElementById('plugin-content');
+    const focusCalls = [], syntaxCalls = [], confirmAnswers = [];
+    // Native textareas normalize newlines and put the caret at EOF on .value assignment.
+    // The basic shared DOM deliberately does not emulate these browser behaviors.
+    let value = '';
+    Object.defineProperty(editor, 'value', {
+        get: () => value,
+        set: content => {
+            value = String(content).replace(/\r\n?/g, '\n');
+            editor.selectionStart = editor.selectionEnd = value.length;
+        },
+    });
+    editor.scrollTop = editor.scrollLeft = 0;
+    editor.focus = options => {
+        focusCalls.push({preventScroll: options && options.preventScroll, disabled: editor.disabled});
+        document.activeElement = editor;
+        if (!options || !options.preventScroll) editor.scrollTop = 99999;
+    };
     const calls = [];
     const confirmations = [];
     let removed = false;
@@ -28,12 +47,20 @@ async function setup({manage = true, confirm = true, failDelete = false, uploadR
         {path: 'LuckPerms', name: 'LuckPerms', kind: 'folder', size: 0, editable: false},
         {path: 'Demo.JAR', name: 'Demo.JAR', kind: 'file', size: 1234, editable: false},
         {path: 'config.yml', name: 'config.yml', kind: 'file', size: 50, editable: true},
+        {path: 'second.json', name: 'second.json', kind: 'file', size: 20, editable: true},
     ];
     const window = {
         PluginConfigSearch, panelCan: permission => permission === 'plugins.view' || manage,
-        confirm: message => { confirmations.push(message); return confirm; },
+        confirm: message => { confirmations.push(message); return confirmAnswers.length ? confirmAnswers.shift() : confirm; },
         addEventListener() {},
     };
+    if (highlight) window.PanelConfigEditor = {attach(node) {
+        assert.equal(node, editor);
+        return {
+            setFile: filename => syntaxCalls.push({filename, value: editor.value}),
+            syncScroll: () => syntaxCalls.push({scrollTop: editor.scrollTop, scrollLeft: editor.scrollLeft}),
+        };
+    }};
     async function fetch(url, options = {}) {
         calls.push({url, options});
         let data;
@@ -46,7 +73,15 @@ async function setup({manage = true, confirm = true, failDelete = false, uploadR
                 {path: 'LuckPerms/preset.json.gz', name: 'preset.json.gz', kind: 'file', size: 150, editable: false}
             ] : folder ? [] : entries.filter(entry => !removed || entry.path !== 'Demo.JAR')};
         } else if (url.startsWith('/api/plugins/file?')) {
-            data = {path: 'config.yml', content: 'key: true\nkey: false', revision: 'config-revision'};
+            const filename = new URLSearchParams(url.split('?')[1]).get('path');
+            const response = fileResponses.shift();
+            status = response ? response.status || 200 : 200;
+            data = response ? response.data
+                : {path: filename, content: 'key: true\nkey: false', revision: 'config-revision'};
+        } else if (url === '/api/plugins/file' && options.method === 'PUT') {
+            const response = saveResponses.shift();
+            status = response ? response.status || 200 : 200;
+            data = response ? response.data : {revision: 'saved-revision', message: 'Config saved.'};
         } else if (url.startsWith('/api/plugins/delete?')) {
             data = {path: 'Demo.JAR', name: 'Demo.JAR', revision: 'jar-revision'};
         } else if (url === '/api/plugins/delete' && options.method === 'DELETE') {
@@ -69,7 +104,8 @@ async function setup({manage = true, confirm = true, failDelete = false, uploadR
     const list = document.getElementById('plugin-file-list');
     const row = name => list.children.find(element => element.dataset.path === name);
     const deleteButton = () => row('Demo.JAR').children[2].children[0];
-    return {document, calls, confirmations, row, deleteButton};
+    return {document, calls, confirmations, row, deleteButton, editor, focusCalls, syntaxCalls,
+        confirmAnswers, fileResponses, saveResponses};
 }
 
 (async () => {
@@ -214,5 +250,68 @@ async function setup({manage = true, confirm = true, failDelete = false, uploadR
     assert.match(modUpload.document.getElementById('plugins-message').textContent, /Mod JARs require a restart/);
     const modViewer = await setup({addonKind: 'mod', manage: false});
     assert.equal(modViewer.row('Demo.JAR').children[2].children.length, 0);
-    console.log('Plugin/mod UI checks passed (dynamic roots and labels, folder navigation, data uploads, JAR routing, replacement confirmation, permissions, partial failures, search, and deletion).');
+
+    // Both the syntax-enhanced path and missing-asset fallback must fix native EOF focus.
+    for (const highlight of [false, true]) {
+        const longContent = '# first line\r\n' + 'key: true\r\n'.repeat(500) + 'last: value\r\n';
+        const opening = await setup({highlight, fileResponses: [
+            {data: {path: 'config.yml', content: longContent, revision: 'long-revision'}},
+        ]});
+        opening.editor.scrollTop = 7000; opening.editor.scrollLeft = 300;
+        opening.row('config.yml').children[0].children[0].click(); await settle();
+        const atTop = () => assert.deepEqual(
+            [opening.editor.selectionStart, opening.editor.selectionEnd, opening.editor.scrollTop, opening.editor.scrollLeft],
+            [0, 0, 0, 0]);
+        atTop();
+        assert.equal(opening.editor.value, longContent.replace(/\r\n/g, '\n'));
+        assert.deepEqual(opening.focusCalls.at(-1), {preventScroll: true, disabled: false});
+        if (highlight) {
+            assert.equal(opening.syntaxCalls.find(call => call.filename).filename, 'config.yml');
+            assert.equal(opening.syntaxCalls.find(call => call.filename).value, opening.editor.value);
+            assert.deepEqual(opening.syntaxCalls.at(-1), {scrollTop: 0, scrollLeft: 0});
+        }
+        opening.editor.setSelectionRange(30, 40);
+        opening.editor.scrollTop = 4000; opening.editor.scrollLeft = 70;
+        opening.document.getElementById('reload-config').click(); await settle();
+        atTop();
+        opening.editor.setSelectionRange(4, 8);
+        opening.editor.scrollTop = 1000; opening.editor.scrollLeft = 90;
+        opening.row('second.json').children[0].children[0].click(); await settle();
+        atTop();
+        if (highlight) assert.equal(opening.syntaxCalls.filter(call => call.filename).at(-1).filename, 'second.json');
+        opening.editor.scrollTop = 400; opening.editor.scrollLeft = 20;
+        opening.row('Demo').children[0].children[0].click(); await settle();
+        atTop();
+        assert.equal(opening.editor.value, '');
+        if (highlight) assert.equal(opening.syntaxCalls.filter(call => 'filename' in call).at(-1).filename, '');
+    }
+
+    const retained = await setup({highlight: true});
+    retained.row('config.yml').children[0].children[0].click(); await settle();
+    retained.editor.value = 'draft: retain this\n'; retained.editor.fire('input');
+    retained.editor.setSelectionRange(3, 8); retained.editor.scrollTop = 420; retained.editor.scrollLeft = 51;
+    const view = () => [retained.editor.selectionStart, retained.editor.selectionEnd,
+        retained.editor.scrollTop, retained.editor.scrollLeft];
+    const expectedView = view();
+    const initialSyntax = retained.syntaxCalls.length, initialFocus = retained.focusCalls.length;
+    retained.confirmAnswers.push(false);
+    retained.document.getElementById('reload-config').click(); await settle();
+    assert.deepEqual(view(), expectedView);
+    assert.equal(retained.editor.value, 'draft: retain this\n');
+    retained.saveResponses.push({status: 409, data: {error: 'Config changed. Reload it.'}});
+    retained.document.getElementById('save-config').click(); await settle();
+    assert.deepEqual(view(), expectedView);
+    assert.equal(retained.document.getElementById('editor-state').textContent, 'Unsaved changes');
+    retained.document.getElementById('save-config').click(); await settle();
+    assert.deepEqual(view(), expectedView);
+    assert.equal(retained.document.getElementById('editor-state').textContent, 'Saved');
+    retained.fileResponses.push({status: 503, data: {error: 'Config unavailable.'}});
+    retained.document.getElementById('reload-config').click(); await settle();
+    assert.deepEqual(view(), expectedView);
+    assert.equal(retained.syntaxCalls.length, initialSyntax);
+    assert.equal(retained.focusCalls.length, initialFocus);
+    assert.equal(retained.editor.value, 'draft: retain this\n');
+    assert.match(retained.document.getElementById('plugins-message').textContent, /Config unavailable/);
+
+    console.log('Plugin/mod UI checks passed (dynamic roots, uploads, permissions, search, deletion, top-of-file open/reload, syntax integration/fallback, and retained save/error/cancel positions).');
 })().catch(error => { console.error(error); process.exitCode = 1; });
