@@ -11,6 +11,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from flask import Blueprint, abort, g, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 from connection_guard import ConnectionGuard, GuardConflict
 from guard_auth import GuardAuth, GuardAuthError, GUARD_JAR, SUPPORTED_VERSIONS, KNOWN_PROVIDERS
@@ -493,6 +494,10 @@ class GuardRuntime:
         @bp.errorhandler(ValueError)
         def invalid(error):
             return jsonify(error=str(error), message=str(error)), 400
+
+        @bp.errorhandler(HTTPException)
+        def http_error(error):
+            return jsonify(error=error.description), error.code
 
         @bp.errorhandler(OSError)
         @bp.errorhandler(sqlite3.Error)

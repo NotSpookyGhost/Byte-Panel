@@ -166,6 +166,23 @@ async function setup({kind = 'settings', initial, permissions = ['settings.manag
     assert.match(modeChange.prompts[1], /identities will not be converted/);
     assert.equal(modeChange.el('save').disabled, true);
 
+    const activation = await setup();
+    activation.el('mode').value = 'enforce';
+    activation.el('mode').fire('change');
+    activation.el('license-key').value = 'a-test-key-not-a-real-secret';
+    const shutdown = 'Stop Minecraft and wait for shutdown to finish before changing server files.';
+    activation.queue.push(reply({error: shutdown}, {status: 409}));
+    activation.el('settings-form').fire('submit');
+    await settle();
+    assert.equal(activation.el('settings-message').textContent, shutdown);
+    assert.equal(activation.el('save').disabled, false);
+    activation.queue.push(reply({error: 'Untrusted gateway response'}, {status: 524, type: 'text/html'}));
+    activation.el('settings-form').fire('submit');
+    await settle();
+    assert.match(activation.el('settings-message').textContent, /gateway timed out.*524.*refresh health/i);
+    assert.doesNotMatch(activation.el('settings-message').textContent, /Untrusted gateway response|a-test-key/);
+    assert.equal(activation.el('mode').value, 'enforce');
+
     const invalid = await setup();
     invalid.el('radius').value = '0';
     invalid.el('radius').fire('input');

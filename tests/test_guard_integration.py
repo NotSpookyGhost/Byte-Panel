@@ -153,6 +153,28 @@ class GuardIntegrationTests(unittest.TestCase):
                 connection.close()
         self.assertEqual('8.8.8.8', self.guard.profile('online:' + UUID)['safe_ips'][0]['ip'])
 
+    def test_settings_save_reports_why_minecraft_must_be_stopped(self):
+        path = '/api/connection-security/settings'
+        values = dict(mode='enforce', account_id='123', license_key='test-key')
+        headers = self.headers()
+        with patch.object(self.geo, 'set_credentials', wraps=self.geo.set_credentials) as save:
+            with patch.object(self.panel, 'MINECRAFT_PROCESS', Mock(poll=Mock(return_value=None))):
+                response = self.client.put(path, json=values, headers=headers)
+            self.assertEqual(409, response.status_code)
+            self.assertTrue(response.is_json, response.get_data(as_text=True))
+            self.assertIn('Stop Minecraft', response.json['error'])
+            self.assertNotIn('test-key', response.get_data(as_text=True))
+            with self.panel.server_backups.exclusive():
+                response = self.client.put(path, json=values, headers=headers)
+            self.assertEqual(409, response.status_code)
+            self.assertIn('backup or server file operation', response.json['error'])
+            save.assert_not_called()
+            response = self.client.put(path, json=values, headers=headers)
+            self.assertEqual(200, response.status_code, response.json)
+            save.assert_called_once()
+            self.assertEqual('enforce', response.json['mode'])
+            self.assertNotIn('test-key', response.get_data(as_text=True))
+
     def test_authentication_installation_is_explicit_offline_and_reserved(self):
         endpoint = '/api/connection-security/auth/install'
         with patch.object(self.runtime.auth, 'install', return_value={'installed': True}) as install:

@@ -52,8 +52,15 @@
         if (controller) options.signal = controller.signal;
         try {
             const response = await fetch(path.startsWith('/api/') ? path : BASE + path, options);
-            if (response.redirected || !(response.headers.get('content-type') || '').includes('application/json')) {
-                throw new Error('Unexpected panel response. Refresh and sign in again if needed.');
+            if (response.redirected) {
+                throw new Error('The panel redirected this request. Sign in again and retry.');
+            }
+            if (!(response.headers.get('content-type') || '').includes('application/json')) {
+                if (response.status === 504 || response.status === 524) {
+                    throw new Error('The gateway timed out (HTTP ' + response.status +
+                        '). Open the panel on its local address and refresh health before retrying.');
+                }
+                throw new Error('Unexpected panel response (HTTP ' + response.status + '). Check the panel logs.');
             }
             let data;
             try { data = await response.json(); }
