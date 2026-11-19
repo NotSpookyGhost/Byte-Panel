@@ -291,6 +291,72 @@ class GuardTests(unittest.TestCase):
         self.now += 901
         self.assertEqual('deny', self.guard.prelogin(self.request(ip='1.1.1.1'))['action'])
 
+    def test_panel_safe_ip_is_scoped_and_revocable_after_use(self):
+        self.enroll()
+        other_uuid = str(uuid.uuid4())
+        self.enroll(username='Alex', player_uuid=other_uuid)
+        identity = 'online:' + UUID
+        for address in ('  ::ffff:1.1.1.1  ', '1.1.1.1'):
+            profile = self.guard.manage_safe_ip(identity, address, add=True, actor='owner')
+        self.assertEqual([{'ip': '1.1.1.1', 'source': 'panel', 'added_at': profile['safe_ips'][0]['added_at']}],
+                         profile['safe_ips'])
+        self.assertEqual('deny', self.guard.prelogin(self.request(ip='1.1.1.1', username='Alex',
+                                                                  player_uuid=other_uuid))['action'])
+        attempt = self.request(ip='1.1.1.1', username='SteveRenamed')
+        decision = self.guard.prelogin(attempt)
+        self.assertEqual(('allow', 'safe_ip', False), (decision['action'], decision['reason'], decision['trust_on_success']))
+        self.assertTrue(self.finish(attempt)['completed'])
+        self.assertEqual(['8.8.8.8'], self.guard.profile(identity)['accepted_ips'])
+        cached = next(item for item in self.guard.roster()['identities'] if item['identity'] == identity)
+        self.assertEqual(['8.8.8.8'], cached['accepted_ips'])
+        self.assertEqual('panel', self.new_service().profile(identity)['safe_ips'][0]['source'])
+        self.guard.manage_safe_ip(identity, '1.1.1.1', add=False, actor='owner')
+        self.assertEqual('deny', self.guard.prelogin(self.request(ip='1.1.1.1'))['action'])
+
+    def test_self_safe_ip_requires_current_offline_authentication_and_uses_recorded_ip(self):
+        self.offline()
+        self.enroll()
+        identity = 'offline:steve'
+        self.guard.manage_safe_ip(identity, '2001:db8::23', add=True, actor='owner')
+        attempt = self.request(ip='2001:0db8::0023', username='STEVE')
+        self.assertEqual('safe_ip', self.guard.prelogin(attempt)['reason'])
+        self.guard.manage_safe_ip(identity, '2001:db8::23', add=False, actor='owner')
+        self.finish(attempt)
+        with self.assertRaises(GuardConflict):
+            self.guard.save_session_safe_ip(attempt)
+        self.finish(attempt, ('authenticated',))
+        self.assertTrue(self.guard.save_session_safe_ip(dict(attempt, ip='9.9.9.9'))['created'])
+        self.assertFalse(self.guard.save_session_safe_ip(attempt)['created'])
+        self.assertEqual([('2001:db8::23', 'player')],
+                         [(entry['ip'], entry['source']) for entry in self.guard.profile(identity)['safe_ips']])
+        self.finish(attempt, ('disconnected',))
+        with self.assertRaises(GuardConflict):
+            self.guard.save_session_safe_ip(attempt)
+
+    def test_self_safe_ip_rejects_unjoined_and_revoked_attempts(self):
+        request = self.request()
+        self.guard.prelogin(request)
+        with self.assertRaises(GuardConflict):
+            self.guard.save_session_safe_ip(request)
+        self.finish(request)
+        self.guard.save_settings(dict(radius_km=300))
+        with self.assertRaises(GuardConflict):
+            self.guard.save_session_safe_ip(dict(self.guard.config(), attempt_id=request['attempt_id']))
+
+    def test_safe_ips_require_one_valid_address_and_clear_on_scope_replacement(self):
+        self.enroll()
+        identity = 'online:' + UUID
+        for value in ('8.8.8.0/24', '8.8.8.8:25565', 'fe80::1%eth0', None):
+            with self.assertRaisesRegex(ValueError, 'single IPv4 or IPv6'):
+                self.guard.manage_safe_ip(identity, value, add=True, actor='owner')
+        self.guard.manage_safe_ip(identity, '2001:db8::23', add=True, actor='owner')
+        with patch('connection_guard.MAX_SAFE_IPS', 1), self.assertRaisesRegex(ValueError, 'up to 1'):
+            self.guard.manage_safe_ip(identity, '1.1.1.1', add=True, actor='owner')
+        self.scope = 'server-b'
+        self.assertEqual({}, self.guard.player_profile_links([{'uuid': UUID, 'username': 'Steve'}]))
+        with self.assertRaises(ValueError):
+            self.guard.manage_safe_ip(identity, '1.1.1.1', add=True, actor='owner')
+
     def test_trust_area_preserves_original_and_requires_usable_geo(self):
         self.enroll()
         request = self.request(ip='1.1.1.1')

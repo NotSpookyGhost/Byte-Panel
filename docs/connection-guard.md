@@ -91,6 +91,21 @@ carriers can cause false positives or conceal a different person in the same
 area. Attackers using an already trusted IP may not be flagged. Do not use a
 location match as proof that an account is safe.
 
+### Safe IP addresses
+
+In **Players**, open **Safe IPs** on a player with a Byte Guard profile, or
+**Player details** on one of their Byte Guard events. Panel users with
+**players.security** can add or remove exact IPv4 or IPv6 addresses for that
+identity. Players can run **/safeip** after joining and authenticating to save
+their current connection address. To save a new address from a blocked
+connection, an administrator can add it in the panel or allow one join first.
+
+Each profile can hold up to 32 safe IPs. Saved addresses appear with their
+source and date. They satisfy the location check while the panel bridge is
+available. Minecraft and AuthMe authentication still apply. Removing an address
+revokes that explicit permission. Independently accepted IPs and approved
+geographic references still apply.
+
 ### Review and historical data
 
 The Players timeline distinguishes attempted admission, actual joining,

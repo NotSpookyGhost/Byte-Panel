@@ -92,6 +92,8 @@ class GuardIntegrationTests(unittest.TestCase):
             ('post', '/api/connection-security/auth/install', {'confirm': True}),
             ('post', '/api/connection-security/auth/repair', {'confirm': True}),
             ('post', '/api/connection-security/reviews/12345678', {'action': 'allow_once'}),
+            ('post', '/api/connection-security/players/online:' + UUID + '/safe-ips', {'ip': '1.1.1.1'}),
+            ('delete', '/api/connection-security/players/online:' + UUID + '/safe-ips', {'ip': '1.1.1.1'}),
         ]
         with patch.object(self.guard, 'update_geoip') as download, \
              patch.object(self.runtime.auth, 'install') as install, \
@@ -117,6 +119,39 @@ class GuardIntegrationTests(unittest.TestCase):
                                      headers=self.headers(reviewer)).status_code, 403)
         self.assertEqual(reviewer.post('/api/player/ban', json={'username': 'Steve', 'ip': '1.1.1.1'},
                                       headers=self.headers(reviewer)).status_code, 403)
+
+    def test_safe_ip_management_and_profile_links(self):
+        self.enroll()
+        reviewer = self.user('address-reviewer', ['players.security'])
+        base = '/api/connection-security/players/online:' + UUID
+        saved = reviewer.post(base + '/safe-ips', json={'ip': '2001:0db8::7'}, headers=self.headers(reviewer))
+        self.assertEqual(200, saved.status_code, saved.json)
+        self.assertEqual('2001:db8::7', saved.json['safe_ips'][0]['ip'])
+        viewer = self.user('address-viewer', ['players.view'])
+        self.assertEqual(saved.json, viewer.get(base).json)
+        self.assertIn(f'data-guard-identity="online:{UUID}"', viewer.get('/players').get_data(as_text=True))
+        self.assertEqual('online:' + UUID, viewer.get('/api/players').json[0]['guard_identity'])
+        removed = reviewer.delete(base + '/safe-ips', json={'ip': '2001:db8::7'}, headers=self.headers(reviewer))
+        self.assertEqual(200, removed.status_code, removed.json)
+        self.assertEqual([], removed.json['safe_ips'])
+
+    def test_bridge_safe_ip_requires_a_current_session_and_token(self):
+        joined = self.enroll()
+        self.runtime.port = 0
+        self.runtime.start_bridge()
+        self.addCleanup(self.runtime.close)
+        body = {key: joined[key] for key in ('scope', 'policy_revision', 'attempt_id', 'identity_mode', 'protocol_version')}
+        for token, changes, expected in [('', {}, 401), (self.runtime._token(), {'attempt_id': 'does-not-exist'}, 409),
+                                         (self.runtime._token(), {}, 200)]:
+            connection = http.client.HTTPConnection('127.0.0.1', self.runtime.port, timeout=3)
+            try:
+                connection.request('POST', '/v1/safe-ip', json.dumps(dict(body, **changes)),
+                                   {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+                response = connection.getresponse()
+                self.assertEqual(expected, response.status, response.read())
+            finally:
+                connection.close()
+        self.assertEqual('8.8.8.8', self.guard.profile('online:' + UUID)['safe_ips'][0]['ip'])
 
     def test_authentication_installation_is_explicit_offline_and_reserved(self):
         endpoint = '/api/connection-security/auth/install'

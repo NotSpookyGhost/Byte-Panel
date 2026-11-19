@@ -10,6 +10,7 @@
     let pageActive = true, pending = false, timer = null;
     let saved = null, auth = null, preview = null, nextCursor = null, currentCursor = '';
     let filter = {identity: '', status: ''};
+    let profileIdentity = '';
     let settingsDirty = false;
     const text = value => typeof value === 'string' || typeof value === 'number' ? String(value) : '';
     const date = value => {
@@ -31,8 +32,7 @@
         if (className) result.className = className;
         return result;
     }
-    function message(content, error = false) {
-        const target = el(settings ? 'cg-settings-message' : 'cg-events-message');
+    function message(content, error = false, target = el(settings ? 'cg-settings-message' : 'cg-events-message')) {
         target.hidden = false;
         target.textContent = text(content) || (error ? 'The request could not be completed. Refresh and try again.' : 'Ready.');
         target.classList.toggle('error', error);
@@ -161,6 +161,10 @@
             ['cg-filter-submit', 'cg-events-refresh'].forEach(id => { el(id).disabled = pending; });
             el('cg-events-next').disabled = pending || !nextCursor;
             el('cg-event-list').querySelectorAll('button').forEach(button => { button.disabled = pending; });
+            const blocked = pending || !can('players.security');
+            el('cg-safe-ip-input').disabled = blocked;
+            el('cg-safe-ip-add').disabled = blocked;
+            el('cg-safe-ips').querySelectorAll('button').forEach(button => { button.disabled = blocked; });
         }
     }
     function schedule() {
@@ -170,13 +174,13 @@
             timer = setTimeout(() => refresh(), 15000);
         }
     }
-    async function work(action) {
+    async function work(action, report = message) {
         if (!pageActive || pending) return;
         pending = true;
         clearTimeout(timer);
         controls();
         try { await action(); return true; }
-        catch (error) { if (pageActive) message(text(error.message), true); return false; }
+        catch (error) { if (pageActive) report(text(error.message), true); return false; }
         finally { pending = false; controls(); schedule(); }
     }
     async function readSettings(hydrate) {
@@ -302,6 +306,42 @@
             if (pageActive) message('Source IP ban applied. Other players sharing that IP can also be affected.');
         });
     }
+    function renderSafeIPs(profile) {
+        const target = el('cg-safe-ips');
+        target.replaceChildren();
+        const entries = Array.isArray(profile.safe_ips) ? profile.safe_ips : [];
+        if (!entries.length) target.append(node('p', 'No safe IP addresses saved.'));
+        entries.forEach(entry => {
+            const ip = text(entry.ip);
+            if (!ip) return;
+            const row = node('div', undefined, 'cg-safe-ip-row');
+            row.append(node('code', ip), node('span', (entry.source === 'player' ? 'Saved in Minecraft' : 'Added in panel') +
+                ' · ' + date(entry.added_at), 'cg-event-meta'));
+            const remove = actionButton('Remove', () => {
+                if (window.confirm('Remove ' + ip + ' from this player’s safe IPs? Other Byte Guard rules still apply.'))
+                    saveSafeIP(ip, 'DELETE');
+            }, 'players.security', 'btn btn-outline btn-sm');
+            if (remove) {
+                remove.setAttribute('aria-label', 'Remove safe IP ' + ip);
+                row.append(remove);
+            }
+            target.append(row);
+        });
+    }
+    function safeIPMessage(content, error = false) {
+        message(content, error, el('cg-safe-ip-message'));
+    }
+    function saveSafeIP(ip, method) {
+        if (!profileIdentity || !ip || !can('players.security')) return;
+        const identity = profileIdentity;
+        work(async () => {
+            const profile = await api('/players/' + encodeURIComponent(identity) + '/safe-ips', {ip}, method);
+            if (!pageActive || profileIdentity !== identity) return;
+            renderSafeIPs(profile);
+            if (method === 'POST') el('cg-safe-ip-input').value = '';
+            safeIPMessage(method === 'POST' ? 'Safe IP saved.' : 'Safe IP removed.');
+        }, safeIPMessage);
+    }
     async function showProfile(identity) {
         if (pending || !can('players.view')) return;
         await work(async () => {
@@ -330,7 +370,13 @@
             const ips = Array.isArray(profile.accepted_ips) ? profile.accepted_ips.filter(ip => typeof ip === 'string') : [];
             body.append(node('p', ips.length ? ips.slice(0, 200).join(', ') : 'No accepted IPs recorded.'));
             if (ips.length > 200) body.append(node('p', 'Showing the first 200 of ' + ips.length + ' accepted IPs.'));
+            profileIdentity = identity;
+            renderSafeIPs(profile);
+            el('cg-safe-ip-input').value = '';
+            el('cg-safe-ip-form').hidden = !can('players.security');
+            el('cg-safe-ip-message').hidden = true;
             el('cg-profile').hidden = false;
+            el('cg-profile').focus();
         });
     }
     function applyFilter() {
@@ -430,7 +476,21 @@
         el('cg-events-next').addEventListener('click', () => {
             if (nextCursor) work(() => readEvents(nextCursor));
         });
-        el('cg-profile-close').addEventListener('click', () => { el('cg-profile').hidden = true; });
+        el('cg-profile-close').addEventListener('click', () => {
+            profileIdentity = '';
+            el('cg-profile').hidden = true;
+        });
+        el('cg-safe-ip-form').addEventListener('submit', event => {
+            event.preventDefault();
+            saveSafeIP(el('cg-safe-ip-input').value.trim(), 'POST');
+        });
+        // Capture before the roster row opens its separate player audit dialog.
+        el('rosterTable').addEventListener('click', event => {
+            const button = event.target.closest('[data-guard-identity]');
+            if (!button) return;
+            event.stopPropagation();
+            showProfile(button.dataset.guardIdentity);
+        }, true);
     }
     window.addEventListener('beforeunload', event => {
         if (settingsDirty) { event.preventDefault(); event.returnValue = ''; }

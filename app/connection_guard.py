@@ -21,6 +21,7 @@ EVENT_DAYS = 90
 EVENT_LIMIT = 100000
 ATTEMPT_SECONDS = 120
 MAX_INFLIGHT = 4096
+MAX_SAFE_IPS = 32
 _USERNAME = re.compile(r'^[A-Za-z0-9_]{1,16}$')
 _ATTEMPT = re.compile(r'^[A-Za-z0-9_-]{8,80}$')
 
@@ -423,6 +424,8 @@ class ConnectionGuard:
                     eligible, reason = reservation is None, 'new_identity' if reservation is None else 'identity_busy'
                 elif ip in profile['accepted_ips']:
                     eligible, reason = True, 'accepted_ip'
+                elif any(entry['ip'] == ip for entry in profile.get('safe_ips', [])):
+                    eligible, reason = True, 'safe_ip'
                 elif approval and (not approval['claim'] or approval['claim'] == attempt_id):
                     eligible, reason, approval_source = True, 'approved_once', approval['source']
                 elif any(nearby(reference, location, policy['radius_km']) for reference in profile['references']):
@@ -481,8 +484,8 @@ class ConnectionGuard:
     def _decision(event):
         message = ('Connection requires administrator review. Reference: ' + event['attempt_id'][:12]
                    if event['action'] == 'deny' else '')
-        # A one-use override never becomes an accepted-IP outage permission.
-        cache_trust = event['trust_on_success'] and not event['approval_source']
+        # Explicit per-IP permissions remain revocable through the live panel.
+        cache_trust = event['trust_on_success'] and not event['approval_source'] and event['reason'] != 'safe_ip'
         return {**{key: event[key] for key in ('protocol_version', 'attempt_id', 'scope', 'policy_revision',
                                               'mode', 'identity_mode', 'action', 'reason')},
                 'trust_on_success': bool(cache_trust), 'message': message}
@@ -582,7 +585,7 @@ class ConnectionGuard:
                 self._complete_revoked(conn, event)
                 return False
             conn.execute('DELETE FROM approvals WHERE identity=? AND ip=?', (event['identity'], event['ip']))
-        elif event['ip'] not in profile['accepted_ips']:
+        elif event['reason'] != 'safe_ip' and event['ip'] not in profile['accepted_ips']:
             profile['accepted_ips'].append(event['ip'])
         profile.update(username=event['username'], last_seen=event['timestamp'], authenticated=True)
         self._store_profile(conn, profile)
@@ -649,6 +652,69 @@ class ConnectionGuard:
             if profile is None:
                 raise ValueError('No Byte Guard reference exists for this identity.')
             return profile
+
+    def player_profile_links(self, players):
+        with self._transaction() as conn:
+            mode = self._policy(conn)['identity_mode']
+            known = {row[0] for row in conn.execute('SELECT identity FROM identities')}
+        links = {}
+        for player in players:
+            try:
+                identity = identity_key(mode, player['username'], player['uuid'])
+            except ValueError:
+                continue
+            if identity in known:
+                links[player['uuid']] = identity
+        return links
+
+    def _change_safe_ip(self, conn, profile, ip, *, add, source, actor):
+        entries = profile.setdefault('safe_ips', [])
+        existing = next((entry for entry in entries if entry['ip'] == ip), None)
+        if add and existing is None:
+            if len(entries) >= MAX_SAFE_IPS:
+                raise ValueError(f'A player can have up to {MAX_SAFE_IPS} safe IP addresses.')
+            entries.append(dict(ip=ip, source=source, added_at=_utc(self._clock())))
+        elif not add and existing is not None:
+            entries.remove(existing)
+        else:
+            return False
+        self._store_profile(conn, profile)
+        self._audit(conn, 'safe_ip_added' if add else 'safe_ip_removed', actor,
+                    dict(identity=profile['identity'], ip=ip, source=source))
+        return True
+
+    def manage_safe_ip(self, identity, ip, *, add, actor):
+        try:
+            ip = normalize_ip(ip.strip() if isinstance(ip, str) else ip)
+        except ValueError:
+            raise ValueError('Enter a single IPv4 or IPv6 address.') from None
+        with self._transaction() as conn:
+            policy, profile = self._policy(conn), self._profile(conn, identity)
+            if profile is None or not identity.startswith(policy['identity_mode'] + ':'):
+                raise ValueError('No Byte Guard profile exists for this player in the current identity mode.')
+            self._change_safe_ip(conn, profile, ip, add=add, source='panel', actor=actor)
+            return profile
+
+    def save_session_safe_ip(self, payload):
+        attempt_id = payload.get('attempt_id')
+        if not isinstance(attempt_id, str) or not _ATTEMPT.fullmatch(attempt_id):
+            raise ValueError('Invalid attempt ID.')
+        with self._transaction() as conn:
+            policy, event = self._policy(conn), self._event(conn, attempt_id)
+            self._validate_scope(policy, payload, revision=True)
+            if (policy['mode'] == 'off' or self._effective_mode() != policy['identity_mode']
+                    or not event or event['policy_revision'] != policy['policy_revision']
+                    or event['identity_mode'] != policy['identity_mode'] or event['action'] != 'allow'
+                    or event.get('revoked') or not event['completed'] or not event['joined']
+                    or event['disconnected'] or (policy['identity_mode'] == 'offline' and not event['authenticated'])):
+                raise GuardConflict('A current authenticated join recorded by Byte Guard is required.')
+            profile = self._profile(conn, event['identity'])
+            if profile is None:
+                raise GuardConflict('The player profile is unavailable.')
+            created = self._change_safe_ip(conn, profile, event['ip'], add=True,
+                                           source='player', actor=event['username'])
+            return dict(protocol_version=PROTOCOL_VERSION, attempt_id=attempt_id, accepted=True,
+                        created=created, **policy)
 
     def reset(self):
         with self._transaction() as conn:

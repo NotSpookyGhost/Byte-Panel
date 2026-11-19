@@ -284,6 +284,36 @@ async function setup({kind = 'settings', initial, permissions = ['settings.manag
     assert.deepEqual(viewOnly.buttons().map(button => button.textContent), ['Player details', 'This player’s history']);
     assert.equal(viewOnly.button('Allow next join'), undefined);
     assert.equal(viewOnly.button('Ban source IP'), undefined);
+    const safeProfile = {username: 'Player', safe_ips: [
+        {ip: '2001:db8::7', source: 'player', added_at: '2026-11-18T12:00:00Z'}
+    ]};
+    viewOnly.queue.push(reply(safeProfile));
+    viewOnly.button('Player details').click();
+    await settle();
+    assert.match(viewOnly.el('safe-ips').textContent, /2001:db8::7.*Saved in Minecraft/);
+    assert.equal(viewOnly.el('safe-ip-form').hidden, true);
+    assert.equal(viewOnly.el('safe-ips').querySelectorAll('button').length, 0);
+
+    const safe = await setup({kind: 'players'});
+    safe.queue.push(reply(safeProfile));
+    safe.button('Player details').click();
+    await settle();
+    assert.equal(safe.el('safe-ip-form').hidden, false);
+    const saved = {...safeProfile, safe_ips: [...safeProfile.safe_ips, {ip: '1.1.1.1', source: 'panel'}]};
+    safe.queue.push(reply(saved));
+    safe.el('safe-ip-input').value = ' 1.1.1.1 ';
+    safe.el('safe-ip-form').fire('submit');
+    await settle();
+    assert.equal(safe.calls[2].url, '/api/connection-security/players/offline%3APlayer/safe-ips');
+    assert.equal(safe.calls[2].options.method, 'POST');
+    assert.deepEqual(JSON.parse(safe.calls[2].options.body), {ip: '1.1.1.1'});
+    assert.match(safe.el('safe-ips').textContent, /1.1.1.1.*Added in panel/);
+    safe.queue.push(reply(safeProfile));
+    safe.el('safe-ips').querySelectorAll('button')[1].click();
+    await settle();
+    assert.equal(safe.calls[3].options.method, 'DELETE');
+    assert.deepEqual(JSON.parse(safe.calls[3].options.body), {ip: '1.1.1.1'});
+    assert.match(safe.el('safe-ip-message').textContent, /removed/);
 
     const ban = await setup({kind: 'players'});
     ban.queue.push(reply({status: 'success'}));

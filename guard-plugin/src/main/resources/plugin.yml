@@ -1,8 +1,12 @@
 name: BytePanelGuard
-version: 1.0.0
+version: 1.1.0
 main: app.bytedev.guard.BytePanelGuard
 api-version: '1.20'
 description: Byte Guard private pre-login connection protection for Byte Panel.
 authors: [BytePanel]
 website: https://github.com/NotSpookyGhost/Byte-Panel
 softdepend: [AuthMe, packetevents]
+commands:
+  safeip:
+    description: Save the current connection address to your Byte Guard profile.
+    usage: /safeip

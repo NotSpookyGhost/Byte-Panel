@@ -22,7 +22,7 @@ PERMISSIONS = {
     'logs.clear': 'Clear log history',
     'players.view': 'View players, IP addresses and history',
     'players.manage': 'Kick, ban and unban players',
-    'players.security': 'Review connection alerts and approve player locations',
+    'players.security': 'Review connection alerts and manage approved locations and safe IPs',
     'properties.manage': 'Edit server properties',
     'plugins.view': 'Browse and download plugins/mods and their configs',
     'plugins.manage': 'Upload/delete executable plugins/mods and edit configs (powerful)',

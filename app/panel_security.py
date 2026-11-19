@@ -35,6 +35,7 @@ ROUTE_PERMISSIONS = {
     'connection_security.auth_repair': 'settings.manage',
     'connection_security.events': 'players.view',
     'connection_security.profile': 'players.view',
+    'connection_security.safe_ips': 'players.security',
     'connection_security.review': 'players.security',
     'backups_page': ('backups.create', 'backups.restore'),
     'api_list_backups': ('backups.create', 'backups.restore'),

@@ -417,6 +417,8 @@ class GuardRuntime:
                         elif self.path == '/v1/outcome':
                             result = runtime.guard.outcome(value)
                             runtime.on_outcome(result, value)
+                        elif self.path == '/v1/safe-ip':
+                            result = runtime.guard.save_session_safe_ip(value)
                         elif self.path == '/v1/snapshot':
                             result = runtime.guard.roster()
                         elif self.path == '/v1/heartbeat':
@@ -554,6 +556,11 @@ class GuardRuntime:
         @bp.route('/api/connection-security/players/<path:identity>')
         def profile(identity):
             return jsonify(runtime.guard.profile(identity))
+
+        @bp.route('/api/connection-security/players/<path:identity>/safe-ips', methods=['POST', 'DELETE'])
+        def safe_ips(identity):
+            return jsonify(runtime.guard.manage_safe_ip(identity, payload().get('ip'),
+                add=request.method == 'POST', actor=g.panel_user['username']))
 
         @bp.route('/api/connection-security/reviews/<attempt_id>', methods=['POST'])
         def review(attempt_id):

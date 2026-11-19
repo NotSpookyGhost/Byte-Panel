@@ -1364,34 +1364,39 @@ def clear_logs():
     
     return jsonify({"status": "cleared"})
 
+def player_roster():
+    conn = sqlite3.connect(PLAYER_DB_FILE)
+    conn.row_factory = sqlite3.Row
+    users = conn.execute('''
+        SELECT u.uuid, u.username, u.first_seen, u.last_seen, u.online_status, u.ban_status, u.ban_type,
+               (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip,
+               (SELECT country FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as country
+        FROM users u
+    ''').fetchall()
+    conn.close()
+    roster = [dict(row) for row in users]
+    if not roster:
+        return roster
+    try:
+        links = guard_runtime.guard.player_profile_links(roster)
+    except (OSError, sqlite3.Error, ValueError):
+        return roster
+    for player in roster:
+        if player['uuid'] in links:
+            player['guard_identity'] = links[player['uuid']]
+    return roster
+
 @app.route('/api/players')
 def api_players():
     if not request.args.get('skipSync'):
         sync_bans_from_server()
-    conn = sqlite3.connect(PLAYER_DB_FILE)
-    conn.row_factory = sqlite3.Row
-    users = conn.execute('''
-        SELECT u.uuid, u.username, u.first_seen, u.last_seen, u.online_status, u.ban_status, u.ban_type,
-               (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip,
-               (SELECT country FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as country
-        FROM users u
-    ''').fetchall()
-    conn.close()
-    return jsonify([dict(row) for row in users])
+    return jsonify(player_roster())
 
 @app.route('/players')
 def players():
     sync_bans_from_server()
-    conn = sqlite3.connect(PLAYER_DB_FILE)
-    conn.row_factory = sqlite3.Row
-    users = conn.execute('''
-        SELECT u.uuid, u.username, u.first_seen, u.last_seen, u.online_status, u.ban_status, u.ban_type,
-               (SELECT ip FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as last_ip,
-               (SELECT country FROM login_events WHERE uuid = u.uuid ORDER BY timestamp DESC LIMIT 1) as country
-        FROM users u
-    ''').fetchall()
-    conn.close()
-    return render_template('players.html', config=load_config(), players=users, has_custom=get_custom_assets_state())
+    return render_template('players.html', config=load_config(), players=player_roster(),
+                           has_custom=get_custom_assets_state())
 
 @app.route('/api/player/<uuid>/history')
 def get_player_history(uuid):

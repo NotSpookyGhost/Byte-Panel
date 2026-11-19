@@ -225,14 +225,18 @@
                         </td>
                         <td class="font-mono text-sm">{{ p.last_ip }}</td>
                         <td class="text-sm">🌍 {{ p.country }}</td>
-                        <td class="actions-cell" data-permission="players.manage">
-                            <button class="btn btn-restart btn-sm"
+                        <td class="actions-cell">
+                            {% if p.guard_identity %}
+                            <button type="button" class="btn btn-outline btn-sm" data-permission="players.view"
+                                data-guard-identity="{{ p.guard_identity }}">Safe IPs</button>
+                            {% endif %}
+                            <button class="btn btn-restart btn-sm" data-permission="players.manage"
                                 onclick="openKickModal('{{ p.username }}', event)">Kick</button>
                             {% if p.ban_status %}
-                            <button class="btn btn-outline btn-sm"
+                            <button class="btn btn-outline btn-sm" data-permission="players.manage"
                                 onclick="moderatePlayerDirect('unban', '{{ p.username }}', '{{ p.last_ip }}', event)">Unban</button>
                             {% else %}
-                            <button class="btn btn-stop btn-sm"
+                            <button class="btn btn-stop btn-sm" data-permission="players.manage"
                                 onclick="openBanModal('{{ p.username }}', '{{ p.last_ip }}', event)">Ban</button>
                             {% endif %}
                         </td>
@@ -255,8 +259,17 @@
                 </form>
                 <div id="cg-event-list" class="cg-event-list"></div>
                 <div class="cg-actions"><button id="cg-events-next" type="button" class="btn btn-outline" disabled>Older connections</button></div>
-                <section id="cg-profile" class="cg-profile" hidden aria-labelledby="cg-profile-title">
+                <section id="cg-profile" class="cg-profile" hidden aria-labelledby="cg-profile-title" tabindex="-1">
                     <div class="cg-heading"><h3 id="cg-profile-title">Player protection details</h3><button id="cg-profile-close" type="button" class="btn btn-outline">Close details</button></div>
+                    <h4>Safe IP addresses</h4>
+                    <p class="field-help">Byte Guard recognizes these exact addresses for this player. Players can save their current address in Minecraft with <code>/safeip</code>.</p>
+                    <p id="cg-safe-ip-message" class="cg-message" role="status" hidden></p>
+                    <div id="cg-safe-ips"></div>
+                    <form id="cg-safe-ip-form" class="cg-safe-ip-form" data-permission="players.security" hidden>
+                        <div><label class="field-label" for="cg-safe-ip-input">IPv4 or IPv6 address</label>
+                            <input id="cg-safe-ip-input" type="text" maxlength="45" autocomplete="off" spellcheck="false" required></div>
+                        <button type="submit" id="cg-safe-ip-add" class="btn btn-outline">Add safe IP</button>
+                    </form>
                     <div id="cg-profile-body"></div>
                 </section>
             </section>
@@ -812,6 +825,15 @@
                         <td class="text-sm">🌍 ${p.country || 'Unknown'}</td>
                         <td class="actions-cell">${actionsHtml}</td>
                     `;
+                        if (p.guard_identity) {
+                            const safeIPs = document.createElement('button');
+                            safeIPs.type = 'button';
+                            safeIPs.className = 'btn btn-outline btn-sm';
+                            safeIPs.dataset.permission = 'players.view';
+                            safeIPs.dataset.guardIdentity = p.guard_identity;
+                            safeIPs.textContent = 'Safe IPs';
+                            tr.lastElementChild.prepend(safeIPs);
+                        }
                         tbody.appendChild(tr);
                     });
                     searchPlayers();

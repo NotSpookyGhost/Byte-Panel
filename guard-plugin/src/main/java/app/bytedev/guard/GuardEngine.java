@@ -86,7 +86,7 @@ final class GuardEngine {
         heartbeat.addProperty("ready", state.ready() && (!offlineRequired() || authReady));
         heartbeat.addProperty("auth_ready", authReady);
         heartbeat.addProperty("status", offlineRequired() && !authReady ? "authentication_unavailable" : "ready");
-        heartbeat.addProperty("plugin_version", "1.0.0");
+        heartbeat.addProperty("plugin_version", "1.1.0");
         heartbeat.addProperty("pending_events", state.pending());
         Protocol.response(bridge.call("/v1/heartbeat", heartbeat), config);
     }
@@ -230,6 +230,29 @@ final class GuardEngine {
         }
         }
     }
+    boolean saveSafeIp(String id) throws IOException {
+        synchronized (bridgeLock) {
+            Attempt attempt = attempts.get(id);
+            if (!ready() || mode().equals("off") || attempt == null || !attempt.joined().get()
+                    || attempt.disconnected().get() || (offlineRequired() && !attempt.authenticated().get())
+                    || Protocol.integer(attempt.request(), "policy_revision") != state.revision())
+                throw new IOException("A current authenticated connection is required");
+            replay();
+            if (state.pending() != 0 || revokedAttempts.contains(id))
+                throw new IOException("The authenticated connection has not been confirmed by the panel");
+            JsonObject body = Protocol.common(config);
+            body.addProperty("attempt_id", id);
+            body.addProperty("policy_revision", state.revision());
+            JsonObject reply = bridge.call("/v1/safe-ip", body);
+            Protocol.response(reply, config);
+            if (!id.equals(Protocol.string(reply, "attempt_id"))
+                    || Protocol.integer(reply, "policy_revision") != state.revision()
+                    || !Protocol.bool(reply, "accepted"))
+                throw new IOException("The panel could not confirm the safe IP request");
+            return Protocol.bool(reply, "created");
+        }
+    }
+
     private void expirePending() throws IOException {
         for (Attempt attempt : attempts.values()) {
             if (!attempt.joined().get() && clock.millis() - attempt.createdAt() > 120000)

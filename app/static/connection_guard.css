@@ -40,6 +40,9 @@
 .cg-badge.pending { color: #f2c66d; border-color: #806c35; }
 .cg-badge.blocked { color: #ffb7be; border-color: #8a4248; }
 .cg-profile pre { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); font-size: .8rem; }
+.cg-profile { scroll-margin-top: 16px; }
+.cg-safe-ip-form { display: grid; grid-template-columns: minmax(0, 24rem) auto; justify-content: start; align-items: end; gap: 12px; margin: 16px 0; }
+.cg-safe-ip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0; }
 .connection-guard .btn:disabled { opacity: .5; cursor: not-allowed; }
 .cg-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
 @media (max-width: 800px) {
@@ -48,5 +51,6 @@
 }
 @media (max-width: 480px) {
     .cg-filters { grid-template-columns: 1fr; }
+    .cg-safe-ip-form { grid-template-columns: 1fr; }
     .cg-actions .btn { flex: 1 1 100%; }
 }

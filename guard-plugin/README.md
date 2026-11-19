@@ -11,7 +11,7 @@ Use Java 21 and Maven 3.9.9:
 
     mvn -B -ntp package
 
-The output is target/BytePanelGuard.jar (plugin version 1.0.0). The Maven
+The output is target/BytePanelGuard.jar (plugin version 1.1.0). The Maven
 build runs the Java state-machine and protocol tests before packaging. Gson is
 relocated into the JAR. Bukkit and Log4j APIs are provided by the server and are
 not bundled.

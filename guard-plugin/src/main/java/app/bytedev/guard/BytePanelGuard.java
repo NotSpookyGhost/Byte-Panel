@@ -7,6 +7,8 @@ import java.time.Clock;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.*;
 import org.bukkit.event.player.*;
@@ -43,6 +45,7 @@ public final class BytePanelGuard extends JavaPlugin implements Listener {
         final AtomicBoolean loginEvent = new AtomicBoolean();
         final AtomicBoolean joined = new AtomicBoolean();
         final AtomicBoolean authenticated = new AtomicBoolean();
+        final AtomicBoolean savingSafeIp = new AtomicBoolean();
         Session(GuardEngine.Attempt attempt, String ip) {
             this.attempt = attempt; this.ip = ip;
             expires = System.currentTimeMillis() + 120000;
@@ -238,6 +241,57 @@ public final class BytePanelGuard extends JavaPlugin implements Listener {
     private static boolean sameIp(Session session, InetAddress address) {
         try { return address != null && session.ip.equals(Protocol.ip(address.getHostAddress())); }
         catch (IOException e) { return false; }
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (!command.getName().equals("safeip")) return false;
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage("Use /safeip from your Minecraft account.");
+            return true;
+        }
+        if (args.length != 0) return false;
+
+        GuardEngine active = engine;
+        UUID uuid = player.getUniqueId();
+        Session session = sessions.get(uuid);
+        if (active == null || inert || stopping || active.mode().equals("off")) {
+            player.sendMessage("Byte Guard must be active to save your current IP.");
+            return true;
+        }
+        if (session == null || session.player.get() != player || !session.joined.get()
+                || player.getAddress() == null || !sameIp(session, player.getAddress().getAddress())
+                || (active.offlineRequired() && (!authReady || !session.authenticated.get() || !auth.authenticated(player)))) {
+            player.sendMessage("An authenticated join recorded by Byte Guard is required to save your IP.");
+            return true;
+        }
+        if (!session.savingSafeIp.compareAndSet(false, true)) {
+            player.sendMessage("Byte Guard is already saving your IP.");
+            return true;
+        }
+        try {
+            outcomes.execute(() -> {
+                String result;
+                try {
+                    if (stopping || sessions.get(uuid) != session
+                            || (active.offlineRequired() && (!authReady || !session.authenticated.get()))) return;
+                    result = active.saveSafeIp(session.attempt.id()) ? "Your current IP was saved in Byte Guard."
+                            : "Your current IP is already saved in Byte Guard.";
+                } catch (IOException | RuntimeException e) {
+                    result = "Byte Guard could not save your IP. Try again or ask a panel administrator.";
+                } finally {
+                    session.savingSafeIp.set(false);
+                }
+                String reply = result;
+                if (!stopping) getServer().getScheduler().runTask(this, () -> {
+                    if (sessions.get(uuid) == session) player.sendMessage(reply);
+                });
+            });
+        } catch (RejectedExecutionException e) {
+            session.savingSafeIp.set(false);
+            player.sendMessage("Byte Guard is busy. Try /safeip again shortly.");
+        }
+        return true;
     }
 
     private boolean queueOutcome(Session session, String stage) {

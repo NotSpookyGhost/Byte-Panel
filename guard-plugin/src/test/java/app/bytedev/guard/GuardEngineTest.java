@@ -59,6 +59,33 @@ class GuardEngineTest {
         engine.outcome(result.attempt().id(), "joined");
         assertEquals("accepted_ip", state.fallback("offline:alice", "8.8.8.8"));
     }
+    @Test void safeIpSavesOnlyTheCurrentAuthenticatedAttempt() throws Exception {
+        setup("offline");
+        GuardEngine.Decision result = join("Alice", UUID_A, "8.8.8.8");
+        String id = result.attempt().id();
+        assertThrows(IOException.class, () -> engine.saveSafeIp(id));
+        engine.outcome(id, "joined");
+        assertThrows(IOException.class, () -> engine.saveSafeIp(id));
+        assertFalse(bridge.calls.contains("/v1/safe-ip"));
+        engine.outcome(id, "authenticated");
+        bridge.calls.clear();
+        assertTrue(engine.saveSafeIp(id));
+        assertEquals(List.of("/v1/outcome", "/v1/outcome", "/v1/safe-ip"), bridge.calls);
+        assertEquals(Set.of("protocol_version", "scope", "identity_mode", "attempt_id", "policy_revision"),
+                bridge.safeIpRequest.keySet());
+        assertEquals(id, bridge.safeIpRequest.get("attempt_id").getAsString());
+        engine.outcome(id, "disconnected");
+        assertThrows(IOException.class, () -> engine.saveSafeIp(id));
+    }
+    @Test void safeIpIsNeverQueuedDuringBridgeFailure() throws Exception {
+        setup("online");
+        String id = join("Alice", UUID_A, "8.8.8.8").attempt().id();
+        engine.outcome(id, "joined");
+        engine.maintain(true);
+        bridge.offline = true;
+        assertThrows(Bridge.TransportFailure.class, () -> engine.saveSafeIp(id));
+        assertEquals(0, state.pending());
+    }
     @Test void duplicateOfflineCaseCannotStealReservation() throws Exception {
         setup("offline");
         GuardEngine.Decision original = join("Alice", UUID_A, "8.8.8.8");
@@ -250,6 +277,7 @@ class GuardEngineTest {
     static final class FakeBridge implements Bridge {
         final Protocol.Config config;
         JsonObject snapshot;
+        JsonObject safeIpRequest;
         final List<String> calls = new ArrayList<>();
         boolean offline, error, deny, wrongScope, wrongRevision, revoked, revokeOutcomeThenOutage;
         boolean trust = true;
@@ -284,6 +312,11 @@ class GuardEngineTest {
                 reply.addProperty("message", "Please contact an administrator.");
                 reply.addProperty("reason", "test");
                 reply.addProperty("trust_on_success", trust);
+            } else if (route.equals("/v1/safe-ip")) {
+                safeIpRequest = body.deepCopy();
+                reply.addProperty("accepted", true);
+                reply.addProperty("created", true);
+                reply.addProperty("attempt_id", body.get("attempt_id").getAsString());
             } else {
                 reply.addProperty("accepted", true);
                 if (route.equals("/v1/outcome") && revokeOutcomeThenOutage) {
