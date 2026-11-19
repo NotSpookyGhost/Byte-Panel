@@ -5,10 +5,14 @@ import java.io.*;
 import java.time.Clock;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongSupplier;
 
 /** Bukkit-independent protocol state machine; all callers are worker threads. */
 final class GuardEngine {
+    private static final long REPLAY_BUDGET_NANOS = TimeUnit.SECONDS.toNanos(1);
+
     record Attempt(String id, String identity, JsonObject request, boolean trust, long createdAt,
                    AtomicBoolean joined, AtomicBoolean authenticated, AtomicBoolean disconnected) {}
     record Decision(boolean allowed, String message, Attempt attempt) {
@@ -18,6 +22,7 @@ final class GuardEngine {
     private final Bridge bridge;
     private final DurableState state;
     private final Clock clock;
+    private final LongSupplier nanoTime;
     private final Map<String, Attempt> attempts = new ConcurrentHashMap<>();
     private final Map<String, String> reservations = new ConcurrentHashMap<>();
     private final Set<String> revokedAttempts = ConcurrentHashMap.newKeySet();
@@ -29,7 +34,11 @@ final class GuardEngine {
     private final Object bridgeLock = new Object();
 
     GuardEngine(Protocol.Config config, Bridge bridge, DurableState state, Clock clock) {
+        this(config, bridge, state, clock, System::nanoTime);
+    }
+    GuardEngine(Protocol.Config config, Bridge bridge, DurableState state, Clock clock, LongSupplier nanoTime) {
         this.config = config; this.bridge = bridge; this.state = state; this.clock = clock;
+        this.nanoTime = nanoTime;
     }
     String health() { return health; }
     String mode() { return state.mode(); }
@@ -92,9 +101,10 @@ final class GuardEngine {
     }
     private void replay() throws IOException {
         JsonObject entry;
-        long deadline = System.nanoTime() + 1_000_000_000L;
+        long started = nanoTime.getAsLong();
         int replayed = 0;
-        while (replayed++ < 128 && System.nanoTime() < deadline && (entry = state.head()) != null) {
+        while (replayed++ < 128 && nanoTime.getAsLong() - started < REPLAY_BUDGET_NANOS
+                && (entry = state.head()) != null) {
             JsonObject body = entry.getAsJsonObject("body");
             JsonObject reply = bridge.call(Protocol.string(entry, "route"), body);
             Protocol.response(reply, config);

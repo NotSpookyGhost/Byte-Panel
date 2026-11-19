@@ -6,6 +6,7 @@ import java.net.URI;
 import java.nio.file.*;
 import java.time.*;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
@@ -19,13 +20,19 @@ class GuardEngineTest {
     FakeBridge bridge;
     DurableState state;
     GuardEngine engine;
+    private long simulatedNanos;
+    private long replayClockStep;
 
     void setup(String identityMode) throws Exception {
         config = new Protocol.Config(URI.create("http://127.0.0.1:5051"), "a".repeat(64),
                 "test-scope", identityMode, "enforce", temporary);
         bridge = new FakeBridge(config);
         state = new DurableState(config);
-        engine = new GuardEngine(config, bridge, state, Clock.systemUTC());
+        engine = new GuardEngine(config, bridge, state, Clock.systemUTC(), () -> {
+            long now = simulatedNanos;
+            simulatedNanos += replayClockStep;
+            return now;
+        });
         engine.maintain(true);
         assertTrue(engine.ready());
     }
@@ -242,13 +249,23 @@ class GuardEngineTest {
         GuardEngine.Decision original = join("Alice", UUID_A, "8.8.8.8");
         engine.outcome(original.attempt().id(), "joined");
         engine.outcome(original.attempt().id(), "disconnected");
+        assertEquals("accepted_ip", state.fallback("online:" + UUID_A, "8.8.8.8"));
         bridge.offline = false; bridge.revoked = true;
         JsonObject placeholder = new JsonObject();
         placeholder.addProperty("identity", "online:" + UUID_A);
         placeholder.add("accepted_ips", new JsonArray());
         bridge.snapshot.getAsJsonArray("identities").add(placeholder);
+        // Simulate slow replay so each maintenance pass can process only one entry.
+        replayClockStep = TimeUnit.MILLISECONDS.toNanos(600);
+        for (int remaining = 2; remaining > 0; remaining--) {
+            engine.maintain(true);
+            assertEquals(remaining, state.pending());
+            assertEquals("replaying", engine.health());
+            assertFalse(engine.ready());
+            assertEquals("", new DurableState(config).fallback("online:" + UUID_A, "8.8.8.8"));
+        }
         engine.maintain(true);
-        assertTrue(engine.ready());
+        assertTrue(engine.ready(), engine.health());
         assertEquals(0, state.pending());
         assertEquals("", state.fallback("online:" + UUID_A, "8.8.8.8"));
     }
