@@ -56,6 +56,30 @@ class FileManagerIntegrationTests(unittest.TestCase):
                 'path': 'config.txt', 'confirmation': 'config.txt', 'revision': revision}, headers=headers)),
         )
 
+    def test_backup_directory_lists_names_for_settings_users_without_reading_files(self):
+        settings = self.client_for_permissions('backup-settings', ['settings.manage'])
+        viewer = self.client_for_permissions('file-viewer', ['files.view'])
+        url = '/api/backup/exclusions/directory'
+        folder = self.root / 'bluemap'
+        folder.mkdir()
+        (folder / 'maps').mkdir()
+        (self.root / 'ServerEngineInfo').write_text('protected')
+        (self.root / '.panel-temp').write_text('internal')
+        with patch('server_files._editable', side_effect=AssertionError('Picker must not inspect file contents')):
+            root = settings.get(url)
+            self.assertEqual(root.status_code, 200, root.data)
+            entries = {entry['name']: entry for entry in root.json['entries']}
+            self.assertEqual(entries['config.txt'], dict(name='config.txt', path='config.txt', kind='file', selectable=True))
+            self.assertFalse(entries['ServerEngineInfo']['selectable'])
+            self.assertNotIn('.panel-temp', entries)
+            self.assertNotIn('maps', entries)
+            self.assertEqual(settings.get(url, query_string={'path': 'bluemap'}).json['entries'],
+                             [dict(name='maps', path='bluemap/maps', kind='folder', selectable=True)])
+        self.assertEqual(viewer.get(url).status_code, 403)
+        self.assertEqual(self.fixture.app.test_client().get(url).status_code, 401)
+        self.assertEqual(settings.get('/api/files/file?path=config.txt').status_code, 403)
+        self.assertEqual(settings.get(url, query_string={'path': '../backups'}).status_code, 400)
+
     def test_file_read_permissions_are_distinct_from_plugin_permissions(self):
         cases = (('no-files', [], False), ('plugins-only', ['plugins.manage'], False),
                  ('file-reader', ['files.view'], True), ('file-manager', ['files.manage'], True))

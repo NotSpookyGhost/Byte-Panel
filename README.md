@@ -176,11 +176,14 @@ Set scheduling and retention under **Panel Settings → Backups**. New archives
 appear after creation and verification finish. Failed creation leaves existing
 archives intact.
 
-Under **Panel Settings → Backups → Backup exclusions**, choose **Add BlueMap
-renders** and save to skip the default rendered map folder, `bluemap/web/maps`.
-Worlds, the plugin and its configuration stay in the ZIP. For custom storage or
-other exclusions, enter one exact server-relative file or folder per line.
-Folders include all descendants. Remove a line and save to include it again.
+In **Panel Settings → Backups**, click **Choose files and folders**. Open a
+folder by its name and uncheck anything to leave out of future backups.
+Unchecking a folder skips everything inside it, including files added later.
+Choose **Use selection**, then **Save Settings**.
+
+For BlueMap, **Exclude BlueMap renders** selects `bluemap/web/maps`. The world
+and plugin configuration stay in the ZIP. You can also edit **Excluded paths**
+inside the picker for custom locations or folders that do not exist yet.
 
 Exclusions apply to newly created ZIPs, including scheduled backups and safety
 backups before a restore or purge. Restore replaces the server directory, so

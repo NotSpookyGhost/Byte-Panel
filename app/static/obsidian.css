@@ -171,7 +171,18 @@
 .obsidian .settings-section { border:0; background:transparent; padding:0; margin:0; }
 .obsidian .settings-section > summary { display:none; }
 .obsidian .settings-section h2 { margin-top:0; }
-.obsidian #backupExclusions { display:block; width:100%; max-width:56rem; resize:vertical; }
+.obsidian #backupPicker { width:min(38rem, calc(100% - 2rem)); max-height:88vh; overflow:auto; padding:20px; border:1px solid var(--border); border-radius:12px; background:var(--bg-panel); color:var(--text-main); }
+.obsidian #backupPicker::backdrop { background:rgb(0 0 0 / .65); }
+.obsidian .picker-directory, .obsidian .picker-actions, .obsidian #backupPickerEntries li { display:flex; align-items:center; gap:12px; }
+.obsidian #backupPickerPath, .obsidian .picker-entry { overflow-wrap:anywhere; min-width:0; }
+.obsidian #backupPickerEntries { padding:0; margin:10px 0 14px; list-style:none; max-height:35vh; overflow:auto; }
+.obsidian #backupPickerEntries li { padding:7px 4px; border-bottom:1px solid var(--border); }
+.obsidian button.picker-entry { display:inline-flex; align-items:center; gap:8px; border:0; padding:4px 0; background:transparent; color:var(--text-main); text-align:left; cursor:pointer; }
+.obsidian button.picker-entry:hover { color:var(--accent); }
+.obsidian #backupPathDetails { margin:14px 0; }
+.obsidian #backupPathDetails summary { cursor:pointer; }
+.obsidian #backupPathDraft { width:100%; resize:vertical; }
+.obsidian .picker-actions { justify-content:flex-end; margin-top:16px; }
 .obsidian .field-label { display:block; font-size:12px; margin-bottom:7px; color:var(--text-main); }
 .obsidian .field-help { font-size:11px; color:var(--text-muted); margin:8px 0 20px; }
 .obsidian .accent-options { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 22px; }

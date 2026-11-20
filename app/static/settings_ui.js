@@ -5,14 +5,6 @@
     const panels = Array.from(document.querySelectorAll('[data-settings-panel]'));
     const form = document.getElementById('settingsForm');
     if (!tabs.length || !form) return;
-    const exclusions = document.getElementById('backupExclusions');
-    const addBlueMap = document.getElementById('addBlueMapExclusion');
-    addBlueMap.addEventListener('click', () => {
-        const lines = exclusions.value.split('\n');
-        const hasMap = lines.some(line => line.trim().replace(/\\/g, '/').replace(/\/+$/, '') === addBlueMap.value);
-        if (!hasMap) exclusions.value = [...lines.filter(line => line.trim()), addBlueMap.value].join('\n');
-        exclusions.focus();
-    });
     function select(key, focus) {
         if (!tabs.some(tab => tab.dataset.settingsTab === key)) key = 'general';
         tabs.forEach(tab => {

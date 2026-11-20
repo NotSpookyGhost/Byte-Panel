@@ -15,6 +15,7 @@
     {% include 'panel_access.html' %}
     {% include 'panel_ui.html' %}
     <script src="{{ url_for('static', filename='settings_ui.js', v=app_version) }}" defer></script>
+    <script src="{{ url_for('static', filename='backup_picker.js', v=app_version) }}" defer></script>
     <script src="{{ url_for('static', filename='addon_updates.js', v=app_version) }}" defer></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='addon_updates.css', v=app_version) }}">
     <script src="{{ url_for('static', filename='backup_progress.js', v=app_version) }}" defer></script>
@@ -138,11 +139,7 @@
                             <p class="field-help">If shutdown does not finish within 3 minutes, the backup is cancelled without force-killing Minecraft. After a clean shutdown, the panel also attempts to restart if creating the archive fails. Users with backup creation permission can trigger this downtime.</p>
                         </div>
                         <h3>Backup exclusions</h3>
-                        <label class="field-label" for="backupExclusions">Files and folders to skip</label>
-                        <textarea id="backupExclusions" name="backup_exclusions" rows="4" spellcheck="false" aria-describedby="backupExclusionsHelp">{{ request.form.get('backup_exclusions') if settings_error and 'backup_exclusions' in request.form else config.get('backup_exclusions', []) | join('\n') }}</textarea>
-                        <p class="field-help" id="backupExclusionsHelp">Enter one exact path per line, relative to the server folder. A folder includes everything inside it. These paths will be missing when you restore a new backup.</p>
-                        <button type="button" id="addBlueMapExclusion" class="btn btn-outline" value="bluemap/web/maps">Add BlueMap renders</button>
-                        <p class="field-help">Adds the default rendered map folder. Your Minecraft worlds and BlueMap configuration stay in the backup. If you use custom map storage, enter its path above.</p>
+                        {% include 'backup_picker.html' %}
                         <h3>Automatic backups</h3>
                         <div style="margin-top: 16px; margin-bottom: 20px;">
                             <label style="display: block; margin-bottom: 8px; font-weight: 600;">Enable Automated Backups</label>

@@ -17,7 +17,7 @@ import threading
 from flask import Blueprint, abort, jsonify, render_template, request, send_file, session
 from werkzeug.exceptions import HTTPException
 
-from server_backups import BackupBusy
+from server_backups import BackupBusy, normalize_backup_exclusions
 
 
 MAX_UPLOAD_BYTES = 256 * 1024 * 1024
@@ -474,8 +474,7 @@ def register_file_manager(app, server_dir, data_dir, load_config, get_assets, mu
     def page():
         return render_template('files.html', config=load_config(), has_custom=get_assets())
 
-    @files.route('/api/files/list')
-    def list_files():
+    def list_directory(describe):
         relative = request.args.get('path', '')
         parts = _parts(relative)
         entries, skipped = [], 0
@@ -486,7 +485,9 @@ def register_file_manager(app, server_dir, data_dir, load_config, get_assets, mu
                         abort(413, description='This folder has too many entries to display safely.')
                     try:
                         _name(child.name)
-                        entries.append(entry(directory, child.name, '/'.join((*parts, child.name))))
+                        entries.append(describe(directory, child.name, '/'.join((*parts, child.name))))
+                    except FileNotFoundError:
+                        skipped += 1  # A live server may rotate a file during the scan.
                     except HTTPException as error:
                         if error.code not in (400, 403):
                             raise
@@ -494,6 +495,21 @@ def register_file_manager(app, server_dir, data_dir, load_config, get_assets, mu
         entries.sort(key=lambda item: (item['kind'] != 'folder', item['name'].casefold()))
         return jsonify(path=relative, parent='/'.join(parts[:-1]) if parts else None,
                        entries=entries, skipped=skipped)
+
+    @files.route('/api/files/list')
+    def list_files():
+        return list_directory(entry)
+
+    @files.route('/api/backup/exclusions/directory')
+    def backup_directory():
+        def describe(directory, name, relative):
+            folder = stat.S_ISDIR(directory.info(name).st_mode)
+            try:
+                selectable = normalize_backup_exclusions([relative]) == [relative]
+            except ValueError:
+                selectable = False
+            return dict(name=name, path=relative, kind='folder' if folder else 'file', selectable=selectable)
+        return list_directory(describe)
 
     @files.route('/api/files/file', methods=['GET', 'PUT'])
     def file():

@@ -59,6 +59,27 @@ def check_setup_build_progress(page, base, check):
           'Setup fill retains the visible accent color after submitting server creation')
 
 
+def check_backup_picker(page, check):
+    open_picker = page.get_by_role('button', name='Choose files and folders')
+    dialog = page.get_by_role('dialog', name='Choose backup contents')
+    open_picker.click()
+    dialog.get_by_role('button', name='Exclude BlueMap renders').click()
+    dialog.get_by_role('button', name='Cancel').click()
+    check(page.locator('#backupExclusions').input_value() == '', 'Cancel discards draft exclusions')
+
+    open_picker.click()
+    dialog.get_by_role('button', name='plugins', exact=True).click()
+    dialog.get_by_role('button', name='LuckPerms', exact=True).click()
+    dialog.get_by_role('checkbox', name='Include plugins/LuckPerms/config.yml').uncheck()
+    dialog.get_by_role('button', name='Up one folder').click()
+    folder = dialog.get_by_role('checkbox', name='Include plugins/LuckPerms', exact=True)
+    check(folder.evaluate('box => box.indeterminate'), 'Folder reflects a nested exclusion')
+    dialog.get_by_role('button', name='Use selection').click()
+    check(page.locator('#backupExclusions').input_value() == 'plugins/LuckPerms/config.yml',
+          'Picker uses the exact server-relative path')
+    page.get_by_role('button', name='Revert', exact=True).click()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--artifacts', default=str(Path(tempfile.gettempdir()) / 'byte-panel-obsidian-qa'))
@@ -437,6 +458,7 @@ def main():
             page.set_viewport_size({'width':1440,'height':1000})
             # Persist offline-backup mode through its actual settings control.
             page.locator('[data-settings-tab=backups]').click()
+            check_backup_picker(page, check)
             check(not page.locator('#backupShutdown').is_checked(), 'Shutdown backups are opt-in')
             page.locator('#backupShutdown').check()
             page.locator('#settingsForm button[type=submit]').click()

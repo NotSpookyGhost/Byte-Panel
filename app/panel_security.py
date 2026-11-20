@@ -37,6 +37,7 @@ ROUTE_PERMISSIONS = {
     'plugins.create_config': 'plugins.manage',
     'plugins.download': 'plugins.view', 'plugins.delete_plugin': 'plugins.manage',
     'files.page': 'files.view', 'files.list_files': 'files.view',
+    'files.backup_directory': 'settings.manage',
     'files.file': 'files.view', 'files.entry_details': 'files.view', 'files.download': 'files.view',
     'files.upload': 'files.manage', 'files.mkdir': 'files.manage',
     'files.create': 'files.manage', 'files.move': 'files.manage',

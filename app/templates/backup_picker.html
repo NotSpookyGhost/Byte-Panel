@@ -1,0 +1,26 @@
+{% from 'ui_icons.html' import icon %}
+<textarea hidden id="backupExclusions" name="backup_exclusions">{{ request.form.get('backup_exclusions') if settings_error and 'backup_exclusions' in request.form else config.get('backup_exclusions', []) | join('\n') }}</textarea>
+<button type="button" id="openBackupPicker" class="btn btn-outline" aria-haspopup="dialog" aria-controls="backupPicker">{{ icon('folder') }} Choose files and folders</button>
+<p id="backupSelectionSummary" class="field-help" role="status"></p>
+<dialog id="backupPicker" aria-labelledby="backupPickerTitle" aria-describedby="backupPickerHelp">
+    <h2 id="backupPickerTitle" tabindex="-1" autofocus>Choose backup contents</h2>
+    <p id="backupPickerHelp" class="field-help">Checked items are included. Uncheck a folder to skip everything inside it, or open it to choose individual files.</p>
+    <div class="picker-directory">
+        <button type="button" class="btn btn-outline" id="backupPickerUp">Up one folder</button>
+        <strong id="backupPickerPath" tabindex="-1"></strong>
+    </div>
+    <p id="backupPickerStatus" class="field-help" role="status"></p>
+    <button type="button" id="backupPickerRetry" class="btn btn-outline" hidden>Retry folder</button>
+    <ul id="backupPickerEntries" aria-label="Server files and folders"></ul>
+    <template id="backupFolderIcon">{{ icon('folder') }}</template>
+    <button type="button" class="btn btn-outline" id="addBlueMapExclusion" value="bluemap/web/maps">Exclude BlueMap renders</button>
+    <details id="backupPathDetails">
+        <summary>Excluded paths <span id="backupPickerCount"></span></summary>
+        <label for="backupPathDraft" class="field-label">One server-relative path per line</label>
+        <textarea id="backupPathDraft" rows="3" spellcheck="false"></textarea>
+    </details>
+    <div class="picker-actions">
+        <button type="button" id="backupPickerCancel" class="btn btn-outline">Cancel</button>
+        <button type="button" id="backupPickerApply" class="btn btn-primary">Use selection</button>
+    </div>
+</dialog>
