@@ -89,6 +89,37 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(stale.read_text(), 'old live file must remain untouched')
         self.assertEqual((self.server / 'player_history.json').read_text(), 'stale')
 
+    def test_exclusions_prune_only_selected_paths_from_new_backups(self):
+        maps = 'bluemap/web/maps'
+        tiles = maps + '/overworld/tiles/0.bin'
+        keep = ['bluemap/web/maps-custom/file', 'plugins/BlueMap/core.conf', 'world/region/r.0.0.mca',
+                'bluemap/web/index.html', 'logs/older.log', 'nested/logs/latest.log', 'ServerEngineInfo']
+        for name in [tiles, 'logs/latest.log', *keep]:
+            path = self.server / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name, encoding='utf-8')
+        original = self.create()
+        self.config['backup_exclusions'] = [maps + '/', 'logs/latest.log', 'unused/future-folder']
+        scandir = os.scandir
+        def checked_scandir(path):
+            self.assertNotEqual(Path(path), self.server / maps, 'Excluded folders must never be scanned')
+            return scandir(path)
+        for options in ({}, {'is_manual': False}, {'is_initial': True}, {'is_restore_backup': True}):
+            with self.subTest(options=options), patch('os.scandir', checked_scandir), zipfile.ZipFile(self.create(**options)) as archive:
+                names = archive.namelist()
+                self.assertFalse(any(item.startswith(maps + '/') for item in names))
+                self.assertNotIn('logs/latest.log', names)
+                self.assertTrue(set(keep).issubset(names))
+                self.assertEqual(archive.read('world/level.dat'), b'world data')
+                self.assertEqual(json.loads(archive.read('panel_config.json'))['backup_exclusions'],
+                                 [maps, 'logs/latest.log', 'unused/future-folder'])
+        with zipfile.ZipFile(original) as archive:
+            self.assertIn(tiles, archive.namelist())
+        self.config['backup_exclusions'] = []
+        with zipfile.ZipFile(self.create()) as archive:
+            self.assertIn(tiles, archive.namelist())
+            self.assertNotIn('backup_exclusions', json.loads(archive.read('panel_config.json')))
+
     def test_disk_failure_removes_partial_and_preserves_previous_backups(self):
         previous = self.create(is_manual=False)
         original = previous.read_bytes()

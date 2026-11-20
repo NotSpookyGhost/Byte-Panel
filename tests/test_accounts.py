@@ -1848,6 +1848,53 @@ class AccountIntegrationTests(unittest.TestCase):
         self.client.post('/settings', data={'backup_settings_present': 'true'}, headers=self.headers())
         self.assertFalse(self.module.load_config()['backup_shutdown'])
 
+    def test_backup_exclusions_settings_and_restore(self):
+        field = 'backup_exclusions'
+        form = {field: 'bluemap/web/maps/\r\nlogs\\latest.log\r\nbluemap/web/maps'}
+        creator = self.client_for(self.create('zip-creator', ['backups.create']))
+        self.assertEqual(creator.post('/settings', data=form, headers=self.headers(creator)).status_code, 403)
+        self.assertEqual(self.client.post('/settings', data=form).status_code, 403)
+        self.assertEqual(self.module.load_config()[field], [])
+        self.assertEqual(self.client.post('/settings', data=form, headers=self.headers()).status_code, 200)
+        expected = ['bluemap/web/maps', 'logs/latest.log']
+        self.client.post('/settings', data={'backup_settings_present': 'true'}, headers=self.headers())
+        for invalid in ('/', '.', '../world', 'logs/../world', '/data/server', 'C:\\world', '*.dat',
+                        'ServerEngineInfo', 'panel_config.json', 'player_history.json'):
+            with self.subTest(path=invalid):
+                self.assertEqual(self.client.post('/settings', data={field: invalid}, headers=self.headers()).status_code, 400)
+                self.assertEqual(self.module.load_config()[field], expected)
+        maps = self.root / 'bluemap/web/maps'
+        maps.mkdir(parents=True)
+        (maps / 'tile').write_bytes(b'tile')
+        world = self.root / 'world'
+        world.mkdir()
+        (world / 'level.dat').write_bytes(b'world')
+        archive = Path(self.module.create_backup('Test Server', is_manual=True))
+        result = self.client.post('/api/backup/restore', json={'server_name': archive.parent.name,
+                                  'filename': archive.name}, headers=self.headers())
+        self.assertEqual(result.status_code, 200, result.data)
+        self.assertFalse(maps.exists())
+        self.assertEqual((world / 'level.dat').read_bytes(), b'world')
+        self.assertEqual(self.module.load_config()[field], expected)
+        self.client.post('/settings', data={field: ''}, headers=self.headers())
+        self.assertEqual(self.module.load_config()[field], [])
+
+    def test_server_replacements_clear_previous_backup_exclusions(self):
+        archive = self.zip_bytes()
+        other = self.data / 'backups' / 'Other_Realm'
+        other.mkdir(parents=True, exist_ok=True)
+        (other / 'source.zip').write_bytes(archive)
+        for route, params in [('/api/import', {'data': {'import_zip': (io.BytesIO(archive), 'server.zip')}}),
+                              ('/api/backup/restore', {'json': {'server_name': other.name, 'filename': 'source.zip'}}),
+                              ('/api/purge', {})]:
+            with self.subTest(route=route):
+                config = self.module.load_config()
+                config['backup_exclusions'] = ['bluemap/web/maps']
+                self.module.save_config(config)
+                response = self.client.post(route, headers=self.headers(), **params)
+                self.assertEqual(response.status_code, 200, response.data)
+                self.assertEqual(self.module.load_config()['backup_exclusions'], [])
+
     def test_automation_settings_are_opt_in_explicit_and_permission_protected(self):
         self.assertFalse(self.module.DEFAULT_CONFIG['auto_start'])
         self.assertFalse(self.module.DEFAULT_CONFIG['auto_restart'])

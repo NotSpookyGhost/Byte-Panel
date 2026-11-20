@@ -438,7 +438,7 @@
 
             let backupChoice = await showModal(
                 "Restore Backup", 
-                `Restore ${escapeBackupLabel(filename)}?<br><br>This will WIPE current server data, keep the original owner and your account with existing permissions, remove other panel users, and revoke old sessions. Ownership will not change.<br><br>{% if can('backups.create') %}Would you like to back up the current state first?{% else %}You cannot create a safety backup. Ask a backup manager to create one first if needed.{% endif %}`,
+                `Restore ${escapeBackupLabel(filename)}?<br><br>This will WIPE current server data, keep the original owner and your account with existing permissions, remove other panel users, and revoke old sessions. Files excluded from this archive will be missing after restore.<br><br>{% if can('backups.create') %}Would you like to back up the current state first?{% if config.get('backup_exclusions') %} The safety backup will use your current exclusions.{% endif %}{% else %}You cannot create a safety backup. Ask a backup manager to create one first if needed.{% endif %}`,
                 false, false, false,
                 [
                     {% if can('backups.create') %}

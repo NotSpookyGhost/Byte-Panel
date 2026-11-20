@@ -176,6 +176,18 @@ Set scheduling and retention under **Panel Settings → Backups**. New archives
 appear after creation and verification finish. Failed creation leaves existing
 archives intact.
 
+Under **Panel Settings → Backups → Backup exclusions**, choose **Add BlueMap
+renders** and save to skip the default rendered map folder, `bluemap/web/maps`.
+Worlds, the plugin and its configuration stay in the ZIP. For custom storage or
+other exclusions, enter one exact server-relative file or folder per line.
+Folders include all descendants. Remove a line and save to include it again.
+
+Exclusions apply to newly created ZIPs, including scheduled backups and safety
+backups before a restore or purge. Restore replaces the server directory, so
+excluded files must be regenerated or recovered separately. For BlueMap, render
+the map again after restoring. Each filtered ZIP lists its exclusions in
+`panel_config.json`. Existing archives keep their contents and size.
+
 For consistent world and plugin data, enable **Shut down server during backups**
 or stop Minecraft yourself before backing up. Shutdown mode gracefully stops a
 running server, verifies the ZIP and restarts it; an already-offline server stays

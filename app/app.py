@@ -28,6 +28,7 @@ from panel_security import PanelSecurity
 from panel_accounts import grants, session_grants
 from minecraft_releases import MinecraftReleases, DOWNLOAD_HEADERS, java_path
 from server_backups import ServerBackups, BackupBusy, BackupCompletedError, backup_error, backup_server_key
+from server_backups import normalize_backup_exclusions
 from backup_lifecycle import BackupLifecycle
 from server_automation import ServerAutomation
 from server_icon import server_icon_path, save_server_icon, ServerIconError
@@ -178,6 +179,7 @@ DEFAULT_CONFIG = {
     "bluemap_enabled": False,
     "bluemap_port": 8100,
     "backup_shutdown": False,
+    "backup_exclusions": [],
     "auto_start": False,
     "auto_restart": False,
     "bg_blur": 5,
@@ -985,6 +987,8 @@ def api_restore_backup():
 
     # A restored world must be explicitly opted back into public map hosting.
     restored_config = load_config()
+    if safe_name != backup_server_key(config.get('server_name')):
+        restored_config['backup_exclusions'] = []
     restored_config['bluemap_enabled'] = False
     restored_config['auto_start'] = False
     restored_config['auto_restart'] = False
@@ -1734,8 +1738,11 @@ def settings():
                                               re.search(r'[\x00-\x1f\x7f]', server_name)):
             return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
                                    settings_error='Server name must be 1–80 characters without control characters.'), 400
-        # Validate map settings before saving any fields or uploaded images.
+        # Validate paths and map settings before saving any fields or uploaded images.
         try:
+            if 'backup_exclusions' in request.form:
+                config['backup_exclusions'] = normalize_backup_exclusions(
+                    request.form['backup_exclusions'].split('\n'))
             map_port = checked_port(request.form.get('bluemap_port', config.get('bluemap_port', 8100)))
         except ValueError as error:
             return render_template('settings.html', config=config, has_custom=get_custom_assets_state(),
@@ -1986,6 +1993,7 @@ def purge_server():
     config = load_config()
     config['is_setup'] = False
     config['bluemap_enabled'] = False
+    config['backup_exclusions'] = []
     config['auto_start'] = False
     config['auto_restart'] = False
     config['log_session_counter'] = 0
@@ -2129,6 +2137,7 @@ def import_server():
     
     config['bluemap_enabled'] = False
     # A replacement is a new server scope, never an import of old accounts.
+    config['backup_exclusions'] = []
     config['auto_start'] = False
     config['auto_restart'] = False
     actor = security.store.reset(keep_actor=g.panel_user)

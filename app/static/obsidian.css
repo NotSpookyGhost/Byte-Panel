@@ -171,6 +171,7 @@
 .obsidian .settings-section { border:0; background:transparent; padding:0; margin:0; }
 .obsidian .settings-section > summary { display:none; }
 .obsidian .settings-section h2 { margin-top:0; }
+.obsidian #backupExclusions { display:block; width:100%; max-width:56rem; resize:vertical; }
 .obsidian .field-label { display:block; font-size:12px; margin-bottom:7px; color:var(--text-main); }
 .obsidian .field-help { font-size:11px; color:var(--text-muted); margin:8px 0 20px; }
 .obsidian .accent-options { display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 22px; }

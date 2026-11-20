@@ -23,6 +23,31 @@ def backup_server_key(server_name):
     return secure_filename(str(server_name)) or 'server'
 
 
+def normalize_backup_exclusions(paths):
+    """Exact paths relative to the server root, suitable for pruning os.walk."""
+    if not isinstance(paths, list):
+        raise ValueError('Backup exclusions must be a list of server-relative paths.')
+    result = {}
+    for value in paths:
+        if not isinstance(value, str):
+            raise ValueError('Each backup exclusion must be a path.')
+        path = value.strip().replace('\\', '/')
+        if not path:
+            continue
+        if (path.startswith('/') or any(c in path for c in ':*?[]') or
+                any(ord(c) < 32 or ord(c) == 127 for c in path) or len(path) > 1024):
+            raise ValueError('Use exact server-relative paths in backup exclusions, without wildcards or drive letters.')
+        path = path.rstrip('/')
+        if any(part in ('', '.', '..') for part in path.split('/')):
+            raise ValueError('Each backup exclusion must name a file or folder under the server root. Use a path such as bluemap/web/maps.')
+        if path in ('ServerEngineInfo', 'panel_config.json', 'player_history.json'):
+            raise ValueError(f'{path} is panel backup metadata and cannot be excluded.')
+        result[path] = None
+        if len(result) > 128:
+            raise ValueError('Use at most 128 backup exclusions.')
+    return list(result)
+
+
 class BackupBusy(RuntimeError):
     pass
 
@@ -154,6 +179,7 @@ class ServerBackups:
         completed = destination / filename
         partial = destination / (filename + '.partial')
         config = self.load_config()
+        excluded = set(normalize_backup_exclusions(config.get('backup_exclusions', [])))
         done = 0
 
         def walk_error(error):
@@ -170,20 +196,23 @@ class ServerBackups:
             with zipfile.ZipFile(partial, 'x', zipfile.ZIP_DEFLATED, allowZip64=True,
                                  strict_timestamps=False) as archive:
                 for folder, directories, files in os.walk(root, followlinks=False, onerror=walk_error):
-                    for name in sorted(directories):
-                        path = Path(folder) / name
-                        include(archive, path, path.relative_to(root).as_posix())
+                    parent = Path(folder)
+                    prefix = '' if parent == root else parent.relative_to(root).as_posix() + '/'
+                    directories[:] = sorted(name for name in directories if prefix + name not in excluded)
+                    for name in directories:
+                        include(archive, parent / name, prefix + name)
                     for name in sorted(files):
-                        path = Path(folder) / name
-                        relative = path.relative_to(root).as_posix()
-                        if relative in ('panel_config.json', 'player_history.json'):
+                        relative = prefix + name
+                        if relative in excluded or relative in ('panel_config.json', 'player_history.json'):
                             continue
-                        include(archive, path, relative)
+                        include(archive, parent / name, relative)
                         done += 1
                         progress(files_done=done, message=f'Compressing server files: {done} files saved...')
                 # Write portable metadata directly to the ZIP, never into the live server.
-                archive.writestr('panel_config.json', json.dumps(
-                    {key: config[key] for key in PORTABLE_KEYS if key in config}, indent=4))
+                metadata = {key: config[key] for key in PORTABLE_KEYS if key in config}
+                if excluded:
+                    metadata['backup_exclusions'] = sorted(excluded)
+                archive.writestr('panel_config.json', json.dumps(metadata, indent=4))
                 history = self.data / 'player_history.json'
                 if history.exists():
                     include(archive, history, 'player_history.json')
