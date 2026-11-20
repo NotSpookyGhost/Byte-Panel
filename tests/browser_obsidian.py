@@ -290,7 +290,7 @@ def main():
                         check('Other_Realm' in other.locator('summary').inner_text(), 'Other server label')
                         check(active_backup.name not in other.text_content(), 'Active archive not in other server group')
                         check(other_backup.name in other.text_content(), 'Other archive preserved')
-                        download = current.get_by_role('button', name='Download', exact=True)
+                        download = current.get_by_role('button', name='Download ZIP', exact=True)
                         check('Obsidian_Realm/' in download.get_attribute('onclick'), 'Backup download uses storage key')
                     if width in (1440,390):
                         page.screenshot(path=str(artifacts / f'{path}-{width}.png'))
