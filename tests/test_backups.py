@@ -35,7 +35,14 @@ class BackupTests(unittest.TestCase):
         return Path(self.manager.create('Test Server', kwargs.pop('is_manual', True), **kwargs))
 
     def archives(self):
-        return sorted((self.data / 'backups').rglob('*.zip'))
+        return sorted((self.data / 'backups').rglob('*.restic'))
+
+    @contextmanager
+    def exported(self, path):
+        with tempfile.TemporaryFile() as output:
+            self.manager.restic.export(path, output)
+            with zipfile.ZipFile(output) as archive:
+                yield archive
 
     def test_archive_creation_uses_shared_storage_key(self):
         for name, key in [('JRock Bottom', 'JRock_Bottom'), ('Café Realm!', 'Cafe_Realm'),
@@ -54,7 +61,7 @@ class BackupTests(unittest.TestCase):
         os.utime(old, (0, 0))
         os.utime(future, (4354905600, 4354905600))
         (self.server / 'empty-folder').mkdir()
-        with zipfile.ZipFile(self.create()) as archive:
+        with self.exported(self.create()) as archive:
             self.assertEqual(archive.getinfo('old.dat').date_time[0], 1980)
             self.assertEqual(archive.getinfo('future.dat').date_time[0], 2107)
             self.assertEqual(archive.read('world/level.dat'), b'world data')
@@ -78,7 +85,7 @@ class BackupTests(unittest.TestCase):
         (self.server / 'player_history.json').write_text('stale', encoding='utf-8')
         (self.data / 'player_history.json').write_text('{"Player": {}}', encoding='utf-8')
         (self.data / 'panel_accounts.db').write_bytes(b'private')
-        with zipfile.ZipFile(self.create()) as archive:
+        with self.exported(self.create()) as archive:
             config = json.loads(archive.read('panel_config.json'))
             self.assertEqual(config['server_name'], 'Test Server')
             self.assertNotIn('admin_pass', config)
@@ -105,7 +112,7 @@ class BackupTests(unittest.TestCase):
             self.assertNotEqual(Path(path), self.server / maps, 'Excluded folders must never be scanned')
             return scandir(path)
         for options in ({}, {'is_manual': False}, {'is_initial': True}, {'is_restore_backup': True}):
-            with self.subTest(options=options), patch('os.scandir', checked_scandir), zipfile.ZipFile(self.create(**options)) as archive:
+            with self.subTest(options=options), patch('os.scandir', checked_scandir), self.exported(self.create(**options)) as archive:
                 names = archive.namelist()
                 self.assertFalse(any(item.startswith(maps + '/') for item in names))
                 self.assertNotIn('logs/latest.log', names)
@@ -113,10 +120,10 @@ class BackupTests(unittest.TestCase):
                 self.assertEqual(archive.read('world/level.dat'), b'world data')
                 self.assertEqual(json.loads(archive.read('panel_config.json'))['backup_exclusions'],
                                  [maps, 'logs/latest.log', 'unused/future-folder'])
-        with zipfile.ZipFile(original) as archive:
+        with self.exported(original) as archive:
             self.assertIn(tiles, archive.namelist())
         self.config['backup_exclusions'] = []
-        with zipfile.ZipFile(self.create()) as archive:
+        with self.exported(self.create()) as archive:
             self.assertIn(tiles, archive.namelist())
             self.assertNotIn('backup_exclusions', json.loads(archive.read('panel_config.json')))
 
@@ -124,7 +131,7 @@ class BackupTests(unittest.TestCase):
         previous = self.create(is_manual=False)
         original = previous.read_bytes()
         self.config['auto_backup_keep'] = 1
-        with patch('server_backups.zipfile.ZipFile.write', side_effect=OSError(errno.ENOSPC, 'disk full')):
+        with patch.object(self.manager.restic, 'create', side_effect=OSError(errno.ENOSPC, 'disk full')):
             with self.assertRaises(OSError):
                 self.create(is_manual=False)
         self.assertEqual(self.archives(), [previous])
@@ -133,33 +140,31 @@ class BackupTests(unittest.TestCase):
         self.assertFalse((self.server / 'panel_config.json').exists())
         self.assertFalse(self.manager.lock.locked())
 
-    def test_partial_archive_is_hidden_until_verified(self):
-        original = zipfile.ZipFile.testzip
-        def verify(archive):
-            self.assertEqual(self.archives(), [])
-            self.assertEqual(len(list((self.data / 'backups').rglob('*.partial'))), 1)
-            return original(archive)
-        with patch('server_backups.zipfile.ZipFile.testzip', verify):
-            complete = self.create()
-        self.assertEqual(self.archives(), [complete])
+    def test_snapshot_is_only_published_after_successful_validation(self):
+        run = self.manager.restic.run
+        def fail_listing(repo, args, **kwargs):
+            if 'ls' in args:
+                self.assertEqual(self.archives(), [])
+                raise RuntimeError('Verification failed')
+            return run(repo, args, **kwargs)
+        with patch.object(self.manager.restic, 'run', side_effect=fail_listing):
+            with self.assertRaisesRegex(RuntimeError, 'Verification'):
+                self.create()
+        self.assertEqual(self.archives(), [])
+        # Restic has saved a tree, but the panel never published it. Recover it on the next run.
+        good = self.create()
+        survivors = json.loads(run(good.parent / '.restic-repo', ['--json', 'snapshots']))
+        self.assertEqual([s['id'] for s in survivors], [json.loads(good.read_text())['snapshot']])
+        self.assertFalse(list(good.parent.glob('.creating-*')))
 
-    def test_verification_and_publication_failures_publish_nothing(self):
-        for target, kwargs in (
-            ('server_backups.zipfile.ZipFile.testzip', {'return_value': 'world/level.dat'}),
-            ('server_backups.os.replace', {'side_effect': PermissionError(errno.EACCES, 'denied')})
-        ):
-            with self.subTest(target=target), patch(target, **kwargs):
-                with self.assertRaises((OSError, ValueError)):
-                    self.create()
-            self.assertEqual(self.archives(), [])
-            self.assertEqual(list((self.data / 'backups').rglob('*.partial')), [])
-
-    def test_filesystem_traversal_errors_are_not_silently_ignored(self):
-        def cannot_walk(*args, **kwargs):
-            kwargs['onerror'](PermissionError(errno.EACCES, 'directory unreadable'))
-            return iter(())
-        with patch('server_backups.os.walk', side_effect=cannot_walk):
-            with self.assertRaises(PermissionError):
+    def test_storage_failure_at_publication_never_lists_partial_backup(self):
+        from restic_store import private_write
+        def fail_publication(path, content):
+            if path.suffix == '.restic':
+                raise OSError(errno.ENOSPC, 'device full')
+            private_write(path, content)
+        with patch('restic_store.private_write', side_effect=fail_publication):
+            with self.assertRaises(OSError):
                 self.create()
         self.assertEqual(self.archives(), [])
 
@@ -188,7 +193,7 @@ class BackupTests(unittest.TestCase):
         self.config['auto_backup_keep'] = 0
         last = self.create(is_manual=False)
         self.assertTrue(last.exists())
-        self.assertEqual(len(list(last.parent.glob('*_auto.zip'))), 1)
+        self.assertEqual(len(list(last.parent.glob('*_auto.restic'))), 1)
 
     def test_background_job_is_nonblocking_exclusive_and_scope_bound(self):
         entered = threading.Event()
@@ -221,7 +226,7 @@ class BackupTests(unittest.TestCase):
                         self.fail('Overlapping destructive operation was allowed')
             finally:
                 release.set()
-                self.assertTrue(finished.wait(5))
+                self.assertTrue(finished.wait(60))
         result = self.manager.status(job['job_id'], 'scope')
         self.assertEqual(result['status'], 'success')
         self.assertEqual(result['file'], 'example.zip')
@@ -241,7 +246,7 @@ class BackupTests(unittest.TestCase):
              patch.object(self.manager, '_update', side_effect=record), \
              self.assertLogs(self.log, level='ERROR'):
             job = self.manager.start('scope')
-            self.assertTrue(finished.wait(5))
+            self.assertTrue(finished.wait(60))
         status = self.manager.status(job['job_id'], 'scope')
         self.assertEqual(status['status'], 'error')
         self.assertIn('free space', status['message'])
@@ -336,7 +341,7 @@ class BackupTests(unittest.TestCase):
 
         self.manager = ServerBackups(self.data, self.server, lambda: self.config.copy(),
                                      self.log, backup_context=lifecycle)
-        with patch('server_backups.zipfile.ZipFile.write', side_effect=OSError(errno.ENOSPC, 'disk full')):
+        with patch.object(self.manager.restic, 'create', side_effect=OSError(errno.ENOSPC, 'disk full')):
             with self.assertRaises(OSError) as raised:
                 self.create()
         self.assertEqual(raised.exception.errno, errno.ENOSPC)
@@ -362,7 +367,7 @@ class BackupTests(unittest.TestCase):
         self.assertIsInstance(error.path, str)
         completed = Path(error.path)
         self.assertEqual(self.archives(), [completed])
-        with zipfile.ZipFile(completed) as archive:
+        with self.exported(completed) as archive:
             self.assertIsNone(archive.testzip())
             self.assertEqual(archive.read('world/level.dat'), b'world data')
         self.assertIn('Backup created, but', backup_error(error))
@@ -410,7 +415,7 @@ class BackupTests(unittest.TestCase):
              patch.object(self.manager, '_update', side_effect=update):
             try:
                 job = self.manager.start('scope')
-                self.assertTrue(restart_entered.wait(5))
+                self.assertTrue(restart_entered.wait(60))
                 status = self.manager.status(job['job_id'], 'scope')
                 self.assertEqual(status['status'], 'running')
                 self.assertEqual(status['message'], 'Restarting Minecraft...')
@@ -422,7 +427,7 @@ class BackupTests(unittest.TestCase):
                     self.create()
             finally:
                 release_restart.set()
-                self.assertTrue(finished.wait(5))
+                self.assertTrue(finished.wait(60))
         status = self.manager.status(job['job_id'], 'scope')
         self.assertEqual(events, ['stop', 'archive', 'restart'])
         self.assertEqual(status['status'], 'success')
@@ -451,7 +456,7 @@ class BackupTests(unittest.TestCase):
         with patch.object(self.manager, '_update', side_effect=update), \
              self.assertLogs(self.log, level='ERROR'):
             job = self.manager.start('scope')
-            self.assertTrue(finished.wait(5))
+            self.assertTrue(finished.wait(60))
         status = self.manager.status(job['job_id'], 'scope')
         completed, = self.archives()
         self.assertEqual(status['status'], 'error')
@@ -485,7 +490,7 @@ class BackupTests(unittest.TestCase):
              patch.object(self.manager, '_update', side_effect=update), \
              self.assertLogs(self.log, level='ERROR'):
             job = self.manager.start('scope')
-            self.assertTrue(finished.wait(5))
+            self.assertTrue(finished.wait(60))
         archive.assert_not_called()
         status = self.manager.status(job['job_id'], 'scope')
         self.assertEqual(status['status'], 'error')

@@ -135,7 +135,7 @@
                                 <input type="checkbox" id="backupShutdown" name="backup_shutdown" value="true" aria-describedby="backupShutdownHelp" {% if config.get('backup_shutdown') %}checked{% endif %}>
                                 <span>Shut down server during backups</span>
                             </label>
-                            <p class="field-help" id="backupShutdownHelp">Applies to manual and scheduled backups. Players will be disconnected while Minecraft shuts down, the archive is created and verified, and the server starts again. A server that was already offline stays offline.</p>
+                            <p class="field-help" id="backupShutdownHelp">Applies to manual and scheduled backups. Players will be disconnected while Minecraft shuts down, the restic snapshot is saved and checked, and the server starts again. A server that was already offline stays offline.</p>
                             <p class="field-help">If shutdown does not finish within 3 minutes, the backup is cancelled without force-killing Minecraft. After a clean shutdown, the panel also attempts to restart if creating the archive fails. Users with backup creation permission can trigger this downtime.</p>
                         </div>
                         <h3>Backup exclusions</h3>
@@ -390,7 +390,7 @@
 
                 <section id="settings-operations" data-settings-panel="operations" role="tabpanel" aria-labelledby="settings-tab-operations"><h2>System Operations</h2><p class="settings-intro">Back up or import your server. Destructive operations still require confirmation and the appropriate permission.</p>
                 <div style="margin-bottom: 24px; display: flex; gap: 10px;">
-                    {% if can('backups.create') %}<button data-permission="backups.create" type="button" class="btn btn-restart" style="flex: 1;" onclick="executeBackup()">Backup ZIP</button>{% endif %}
+                    {% if can('backups.create') %}<button data-permission="backups.create" type="button" class="btn btn-restart" style="flex: 1;" onclick="executeBackup()">Create backup</button>{% endif %}
                     {% if can('server.import') %}<button data-permission="server.import" type="button" class="btn btn-start" style="flex: 1;" onclick="promptImport()">Import Server ZIP</button>{% endif %}
                     <input type="file" id="import-zip" accept=".zip" style="display: none;" onchange="uploadImport(this.files[0])">
                     {% if can('server.purge') %}<button data-permission="server.purge" type="button" onclick="startPurgeWizard()" class="btn btn-stop" style="flex: 1;">Purge Ecosystem</button>{% endif %}
@@ -506,7 +506,7 @@
         }
         
         async function createSettingsBackup(download) {
-            const modal = await showModal("Creating Backup", "Creating archive. Waiting for verified completion...", false, true);
+            const modal = await showModal("Creating Backup", "Creating restic snapshot...", false, true);
             document.getElementById('modal-progress-container').style.display = 'none';
             try {
                 const result = await window.runBackupJob(false, message => {

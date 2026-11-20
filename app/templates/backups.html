@@ -130,13 +130,13 @@
             try {
                 let res = await fetch('/api/backups/list');
                 let data = await res.json();
-                renderBackups(data.backups);
+                renderBackups(data.backups, data.storage);
             } catch(e) {
                 document.getElementById('backups-container').innerHTML = '<p style="color: #ef4444;">Failed to load backups.</p>';
             }
         }
         
-        function renderBackups(backupsMap) {
+        function renderBackups(backupsMap, storage = {}) {
             const container = document.getElementById('backups-container');
             if (!backupsMap || Object.keys(backupsMap).length === 0) {
                 container.innerHTML = '<p class="no-backups">No backups found.</p>';
@@ -146,7 +146,7 @@
             
             let totalBytes = 0;
             for (let srv in backupsMap) {
-                backupsMap[srv].forEach(f => totalBytes += (f.size || 0));
+                totalBytes += storage[srv] ?? backupsMap[srv].reduce((sum, f) => sum + (f.size || 0), 0);
             }
             document.getElementById('total-storage-label').innerText = `(Total Space Used: ${formatBytesMbGb(totalBytes)})`;
 
@@ -155,12 +155,12 @@
             
             // Folder keys are normalized by the backend (e.g. spaces become underscores).
             // Keep the display name separate: all file actions still use the actual folder.
-            html += renderServerSection(currentServerKey, backupsMap[currentServerKey] || [], true);
+            html += renderServerSection(currentServerKey, backupsMap[currentServerKey] || [], true, storage[currentServerKey]);
             
             let othersHTML = '';
             for (let srv in backupsMap) {
                 if (srv !== currentServerKey) {
-                    othersHTML += renderServerSection(srv, backupsMap[srv], false);
+                    othersHTML += renderServerSection(srv, backupsMap[srv], false, storage[srv]);
                 }
             }
             
@@ -178,14 +178,14 @@
             }[char]));
         }
 
-        function renderServerSection(serverName, files, isCurrent) {
+        function renderServerSection(serverName, files, isCurrent, storedBytes) {
             const serverLabel = escapeBackupLabel(isCurrent ? currentServerName : serverName);
             let manualFiles = files.filter(f => f.type === 'manual');
             let autoFiles = files.filter(f => f.type === 'auto');
             
             let serverBytes = 0;
             files.forEach(f => serverBytes += (f.size || 0));
-            let sizeStr = formatBytesMbGb(serverBytes);
+            let sizeStr = formatBytesMbGb(storedBytes ?? serverBytes);
             
             let html = ``;
             if (!isCurrent) {
@@ -242,6 +242,7 @@
             
             files.forEach(file => {
                 let sizeStr = formatBytesMbGb(file.size || 0);
+                if (file.format === 'restic') sizeStr += ' logical · ' + formatBytesMbGb(file.added || 0) + ' added';
                 let timeStr = file.timestamp ? formatTimestamp(new Date(file.timestamp * 1000).toISOString()) : file.date;
                 const actionArgs = `${escapeBackupLabel(JSON.stringify(serverName))}, ${escapeBackupLabel(JSON.stringify(file.filename))}`;
                 const downloadUrl = escapeBackupLabel(JSON.stringify(`/api/backup/download/${encodeURIComponent(serverName)}/${encodeURIComponent(file.filename)}`));
@@ -265,7 +266,7 @@
                             <button data-permission="backups.restore" class="btn btn-start" style="padding: 4px 10px; font-size: 0.85rem;" onclick="restoreBackup(${actionArgs})">Restore</button>
                             {% endif %}
                             {% if can('backups.create') %}
-                            <button class="btn btn-outline" style="padding: 4px 10px; font-size: 0.85rem; border-color: var(--text-muted); color: var(--text-main);" onclick="window.location.href=${downloadUrl}">Download</button>
+                            <button class="btn btn-outline" style="padding: 4px 10px; font-size: 0.85rem; border-color: var(--text-muted); color: var(--text-main);" onclick="window.location.href=${downloadUrl}">Download ZIP</button>
                             <button class="btn btn-stop" style="padding: 4px 10px; font-size: 0.85rem;" onclick="deleteBackup(${actionArgs})">Delete</button>
                             {% endif %}
                         </div>
@@ -388,8 +389,8 @@
         }
 
         async function renameBackup(serverName, oldName) {
-            const oldBaseName = oldName.replace(/\.zip$/i, '');
-            let newName = await showModal("Rename Backup", "Enter new name for this backup (excluding .zip extension):", false, false, false, null, true, oldBaseName);
+            const oldBaseName = oldName.replace(/\.(zip|restic)$/i, '');
+            let newName = await showModal("Rename Backup", "Enter a new name for this backup.", false, false, false, null, true, oldBaseName);
             if (!newName) return;
             newName = newName.trim();
             if (!newName || newName === oldBaseName || newName === oldName) return;

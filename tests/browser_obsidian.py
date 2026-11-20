@@ -124,7 +124,10 @@ def main():
 
         # Real archives in the disposable fixture: spaced names normalize on disk.
         active_backup = Path(fixture.module.create_backup('Obsidian Realm', is_manual=True))
-        other_backup = Path(fixture.module.create_backup('Other Realm', is_manual=True))
+        other_backup = fixture.data / 'backups/Other_Realm/other_manual.zip'
+        other_backup.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(other_backup, 'w') as archive:
+            archive.writestr('ServerEngineInfo', '{}')
         active_bytes, other_bytes = active_backup.read_bytes(), other_backup.read_bytes()
 
         @app.before_request
@@ -350,7 +353,7 @@ def main():
                     else:
                         page.get_by_role('button', name='Save', exact=True).click()
                 check(response.value.json()['status'] == 'success', 'Rename endpoint reports success')
-                renamed_backup = active_backup.with_name(new_base + '.zip')
+                renamed_backup = active_backup.with_name(new_base + active_backup.suffix)
                 page.wait_for_function("name => document.getElementById('backups-container').textContent.includes(name)", arg=renamed_backup.name)
                 check(page.locator('.modal-overlay').count() == 0, 'Successful rename closes the dialog')
                 check(not active_backup.exists(), 'Successful rename removes the old filename')
@@ -373,7 +376,7 @@ def main():
                     page.wait_for_function("!document.querySelector('.modal-overlay')")
                 check(len(rename_requests) == count_before_cancel, 'Cancelled, blank and unchanged names do not submit')
             # An existing filename shows a dismissible error and never overwrites data.
-            collision = active_backup.with_name('Existing backup.zip')
+            collision = active_backup.with_name('Existing backup' + active_backup.suffix)
             collision.write_bytes(b'disposable existing archive')
             page.locator('.roster-row').filter(has_text=active_backup.name).get_by_role('button', name='Rename', exact=True).click()
             page.get_by_role('textbox', name='Backup name', exact=True).fill(collision.stem)

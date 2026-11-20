@@ -1,15 +1,12 @@
 """Atomic server archives and short-request jobs with optional offline lifecycle hooks."""
 
 from contextlib import contextmanager, nullcontext
-from datetime import datetime
 import errno
-import json
 import os
 from pathlib import Path
-import stat
 import threading
 import uuid
-import zipfile
+from restic_store import ResticStore
 
 from werkzeug.utils import secure_filename
 
@@ -24,7 +21,7 @@ def backup_server_key(server_name):
 
 
 def normalize_backup_exclusions(paths):
-    """Exact paths relative to the server root, suitable for pruning os.walk."""
+    """Exact paths relative to the server root, used by both the directory picker and snapshot writer."""
     if not isinstance(paths, list):
         raise ValueError('Backup exclusions must be a list of server-relative paths.')
     result = {}
@@ -53,7 +50,7 @@ class BackupBusy(RuntimeError):
 
 
 class BackupCompletedError(RuntimeError):
-    """The ZIP exists, but post-backup recovery failed; never imply it was lost."""
+    """The snapshot exists, but post-backup recovery failed; never imply it was lost."""
     def __init__(self, path, error):
         self.path = str(path)
         message = str(error)
@@ -73,10 +70,11 @@ def backup_error(error):
 
 
 class ServerBackups:
-    def __init__(self, data_dir, server_dir, load_config, logger, backup_context=None):
+    def __init__(self, data_dir, server_dir, load_config, logger, backup_context=None, scope=None):
         self.data = Path(data_dir)
         self.server = Path(server_dir)
         self.load_config = load_config
+        self.restic = ResticStore(self.data, self.server, logger, scope)
         self.logger = logger
         self.backup_context = backup_context
         self.lock = threading.Lock()
@@ -111,6 +109,12 @@ class ServerBackups:
             if path is not None:
                 raise BackupCompletedError(path, error) from error
             raise
+        # Pruning may repack shared data. Minecraft has already restarted here.
+        try:
+            keep = None if is_manual or is_initial or is_restore_backup else max(1, int(self.load_config().get('auto_backup_keep', 5)))
+            self.restic.maintain(Path(path).parent, keep)
+        except (OSError, ValueError, RuntimeError):
+            self.logger.exception('Snapshot saved, but restic maintenance needs attention')
         return path
 
     def status(self, job_id, scope):
@@ -160,85 +164,16 @@ class ServerBackups:
                               server_key=Path(error.path).parent.name)
         finally:
             self.lock.release()
-        # A successful status guarantees a completed ZIP and released filesystem lock.
+        # A successful status guarantees a published snapshot and released filesystem lock.
         self._update(job_id, **result)
 
     def _archive(self, server_name, is_manual, is_initial=False, is_restore_backup=False, progress=None):
         progress = progress or (lambda **values: None)
-        server_name = backup_server_key(server_name)
-        root = self.server.resolve(strict=True)
-        backup_root = self.data / 'backups'
-        destination = backup_root / server_name
-        if backup_root.is_symlink() or destination.is_symlink():
-            raise ValueError('The backup destination must not be a symbolic link.')
-        destination.mkdir(parents=True, exist_ok=True)
-        if root == destination.resolve() or root in destination.resolve().parents:
-            raise ValueError('The backup destination must be outside the server folder.')
-        kind = 'InitialBackup' if is_initial else 'RestoreBackup' if is_restore_backup else 'manual' if is_manual else 'auto'
-        filename = f'{server_name}_{datetime.now():%Y%m%d%H%M%S}_{uuid.uuid4().hex}_{kind}.zip'
-        completed = destination / filename
-        partial = destination / (filename + '.partial')
+        group = self.restic.group(backup_server_key(server_name), create=True)
         config = self.load_config()
-        excluded = set(normalize_backup_exclusions(config.get('backup_exclusions', [])))
-        done = 0
-
-        def walk_error(error):
-            raise error
-
-        def include(archive, path, name):
-            mode = path.lstat().st_mode
-            if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
-                raise ValueError(f'Cannot back up symbolic links or special files: {name}. Replace them with regular files and retry.')
-            archive.write(path, name)
-
-        try:
-            # Clamps out-of-range timestamps *in the archive*, leaving source dates intact.
-            with zipfile.ZipFile(partial, 'x', zipfile.ZIP_DEFLATED, allowZip64=True,
-                                 strict_timestamps=False) as archive:
-                for folder, directories, files in os.walk(root, followlinks=False, onerror=walk_error):
-                    parent = Path(folder)
-                    prefix = '' if parent == root else parent.relative_to(root).as_posix() + '/'
-                    directories[:] = sorted(name for name in directories if prefix + name not in excluded)
-                    for name in directories:
-                        include(archive, parent / name, prefix + name)
-                    for name in sorted(files):
-                        relative = prefix + name
-                        if relative in excluded or relative in ('panel_config.json', 'player_history.json'):
-                            continue
-                        include(archive, parent / name, relative)
-                        done += 1
-                        progress(files_done=done, message=f'Compressing server files: {done} files saved...')
-                # Write portable metadata directly to the ZIP, never into the live server.
-                metadata = {key: config[key] for key in PORTABLE_KEYS if key in config}
-                if excluded:
-                    metadata['backup_exclusions'] = sorted(excluded)
-                archive.writestr('panel_config.json', json.dumps(metadata, indent=4))
-                history = self.data / 'player_history.json'
-                if history.exists():
-                    include(archive, history, 'player_history.json')
-            progress(message='Verifying the backup archive...')
-            with zipfile.ZipFile(partial) as archive:
-                damaged = archive.testzip()
-                if damaged:
-                    raise ValueError(f'Backup verification failed for {damaged}. Check the server storage and retry.')
-            with open(partial, 'r+b') as handle:
-                os.fsync(handle.fileno())
-            os.replace(partial, completed)
-        finally:
-            if partial.exists():
-                try:
-                    partial.unlink()
-                except OSError:
-                    self.logger.exception('Could not remove an incomplete .partial backup; it remains hidden from the backup list')
-
-        # Retention only runs after publication; a failure must not remove good backups.
-        if not is_manual and not is_initial:
-            try:
-                keep = max(1, int(config.get('auto_backup_keep', 5)))
-                old = sorted((p for p in destination.glob('*_auto.zip') if p != completed),
-                             key=lambda p: p.stat().st_mtime)
-                for path in old[:max(0, len(old) + 1 - keep)]:
-                    path.unlink()
-            except (OSError, ValueError, TypeError):
-                self.logger.exception('Backup succeeded, but automatic backup retention failed')
-        return str(completed)
+        excluded = normalize_backup_exclusions(config.get('backup_exclusions', []))
+        metadata = {key: config[key] for key in PORTABLE_KEYS if key in config}
+        if excluded:
+            metadata['backup_exclusions'] = sorted(excluded)
+        kind = 'InitialBackup' if is_initial else 'RestoreBackup' if is_restore_backup else 'manual' if is_manual else 'auto'
+        return self.restic.create(group, kind, metadata, excluded, progress)

@@ -1,0 +1,22 @@
+name: Restic backup integration
+on:
+  push:
+    paths: ['Dockerfile', 'app/app.py', 'app/restic_store.py', 'app/server_backups.py', 'tests/test_restic_workflow.py', '.github/workflows/restic-backups.yml']
+  pull_request:
+    branches: [main]
+    paths: ['Dockerfile', 'app/app.py', 'app/restic_store.py', 'app/server_backups.py', 'tests/test_restic_workflow.py', '.github/workflows/restic-backups.yml']
+permissions:
+  contents: read
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build the production image
+        run: docker build -t byte-panel-restic-test .
+      - name: Exercise snapshots, retention, export and restore inside Alpine
+        run: |
+          docker run --rm --network none --entrypoint python3 \
+            -v "$GITHUB_WORKSPACE/tests:/tests:ro" -e PYTHONPATH=/app:/tests \
+            byte-panel-restic-test -m unittest test_restic_workflow test_backups test_backup_lifecycle

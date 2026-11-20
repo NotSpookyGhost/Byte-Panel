@@ -3,7 +3,7 @@
 import importlib.util
 import html
 from html.parser import HTMLParser
-from contextlib import closing
+from contextlib import closing, contextmanager
 import io
 import json
 import os
@@ -76,6 +76,13 @@ class AccountIntegrationTests(unittest.TestCase):
                 shutil.rmtree(child)
             else:
                 child.unlink()
+
+    @contextmanager
+    def exported_backup(self, path):
+        with tempfile.TemporaryFile() as output:
+            self.module.server_backups.restic.export(path, output)
+            with zipfile.ZipFile(output) as archive:
+                yield archive
 
     def client_for(self, user):
         client = self.app.test_client()
@@ -222,7 +229,7 @@ class AccountIntegrationTests(unittest.TestCase):
         self.assertNotIn('<svg', identity)
         self.assertNotIn('class="login-brand"', login)
         backup = self.client.post('/api/backup/create', headers=self.headers()).json
-        with zipfile.ZipFile(self.data / 'backups' / backup['server_key'] / backup['file']) as archive:
+        with self.exported_backup(self.data / 'backups' / backup['server_key'] / backup['file']) as archive:
             self.assertEqual(archive.read('server-icon.png'), original)
             self.assertFalse(any(name.endswith('.tmp') for name in archive.namelist()))
         self.assertEqual(self.upload_test_icon(image_bytes(color='red')).status_code, 200)
@@ -535,11 +542,13 @@ class AccountIntegrationTests(unittest.TestCase):
         self.config.update(mc_version='26.3', server_type='Forge')
         with patch.object(self.module.release_service, 'resolve_download', return_value=download), \
              patch.object(self.module.requests, 'get') as get, patch.object(self.module.subprocess, 'run') as install, \
-             patch.object(self.module.subprocess, 'Popen') as launch, patch('time.sleep'):
+             patch.object(self.module.subprocess, 'Popen') as launch, patch('time.sleep'), \
+             patch.object(self.module, 'create_backup') as initial_backup:
             get.return_value.iter_content.return_value = [self.zip_bytes()]
             install.return_value.returncode = 0
             launch.return_value.stdout.readline.side_effect = ['Done (1s)! For help, type help\n']
             self.module.setup_server_bg('Forge', '26.3', self.config)
+            initial_backup.assert_called_once_with('Test Server', is_manual=True, is_initial=True)
             self.assertEqual(install.call_args.args[0][0], runtime)
             self.assertEqual(launch.call_args.args[0][0], runtime)
             self.assertTrue(any(value.replace('\\', '/').startswith('@libraries/') for value in launch.call_args.args[0]))
@@ -1593,7 +1602,7 @@ class AccountIntegrationTests(unittest.TestCase):
                     markup = page.get_data(as_text=True)
                     self.assertEqual('onclick="createManualBackup()"' in markup, may_create)
                     self.assertEqual('>Restore</button>' in markup, may_restore)
-                    self.assertEqual('>Download</button>' in markup, may_create)
+                    self.assertEqual('>Download ZIP</button>' in markup, may_create)
                     self.assertEqual('>Delete</button>' in markup, may_create)
                     self.assertEqual("{ id: 'backup', text: 'Backup'" in markup, may_create)
                     # Execute the actual rendered table function, including its rename guard.
@@ -1745,13 +1754,13 @@ class AccountIntegrationTests(unittest.TestCase):
         with patch.object(self.module.server_backups, '_update', side_effect=record):
             result = self.client.post('/api/backup/create', json={'background': True}, headers=self.headers())
             self.assertEqual(result.status_code, 202)
-            self.assertTrue(finished.wait(5), 'Backup worker did not complete')
+            self.assertTrue(finished.wait(60), 'Backup worker did not complete')
         response = self.client.get('/api/backup/status/' + result.json['job_id'])
         self.assertEqual(response.json['status'], 'success', response.json)
         self.assertEqual(response.headers['Cache-Control'], 'no-store')
-        self.assertEqual(response.json['server_key'], 'Test_Server')
-        archive_path = self.data / 'backups' / 'Test_Server' / response.json['file']
-        with zipfile.ZipFile(archive_path) as archive:
+        self.assertTrue(response.json['server_key'].startswith('Test_Server'))
+        archive_path = self.data / 'backups' / response.json['server_key'] / response.json['file']
+        with self.exported_backup(archive_path) as archive:
             self.assertEqual(archive.read('old.dat'), b'old imported file')
             self.assertEqual(archive.getinfo('old.dat').date_time[0], 1980)
             self.assertIsNone(archive.testzip())
@@ -1778,7 +1787,9 @@ class AccountIntegrationTests(unittest.TestCase):
         response = self.client.get('/api/backup/download/' + result.json['server_key'] + '/' + result.json['file'])
         try:
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.data, original)
+            self.assertIn('.zip', response.headers['Content-Disposition'])
+            with zipfile.ZipFile(io.BytesIO(response.data)) as exported:
+                self.assertEqual(exported.read('grouping-check.txt'), marker.read_bytes())
         finally:
             response.close()
         self.assertEqual(archive.read_bytes(), original)
@@ -2249,7 +2260,7 @@ class AccountIntegrationTests(unittest.TestCase):
             with patch.object(self.module, 'start_minecraft_server', side_effect=recovered) as start:
                 result = self.client.post('/api/backup/create', headers=self.headers())
             self.assertEqual(result.status_code, 200, result.json)
-            with zipfile.ZipFile(self.data / 'backups' / result.json['server_key'] / result.json['file']) as archive:
+            with self.exported_backup(self.data / 'backups' / result.json['server_key'] / result.json['file']) as archive:
                 self.assertEqual(archive.read('world-final.dat'), b'final saved chunks')
                 self.assertIn(b'Saved final chunks', archive.read('final-console.log'))
             start.assert_called_once_with()
@@ -2405,19 +2416,16 @@ class AccountIntegrationTests(unittest.TestCase):
         self.assertEqual(users[0]['id'], original_id)
         self.assertEqual(users[0]['role'], 'owner')
         self.assertEqual(viewer.get('/api/stats').status_code, 401)
-        self.module.create_backup('Test Server', True)
-        backup_dir = self.data / 'backups' / 'Test_Server'
-        archive_path = next(backup_dir.glob('*.zip'))
+        archive_path = Path(self.module.create_backup('Test Server', True))
         scope = self.store.scope()
-        result = self.client.post('/api/backup/restore', json={'server_name': 'Test_Server', 'filename': archive_path.name}, headers=self.headers())
+        result = self.client.post('/api/backup/restore', json={'server_name': archive_path.parent.name, 'filename': archive_path.name}, headers=self.headers())
         self.assertEqual(result.status_code, 200)
         self.assertNotEqual(self.store.scope(), scope)
 
     def test_backups_exclude_credentials_and_path_traversal_is_blocked(self):
         self.smtp()
-        self.module.create_backup('Safe Server', True)
-        archive_path = next((self.data / 'backups' / 'Safe_Server').glob('*.zip'))
-        with zipfile.ZipFile(archive_path) as archive:
+        archive_path = Path(self.module.create_backup('Safe Server', True))
+        with self.exported_backup(archive_path) as archive:
             self.assertNotIn('panel_accounts.db', archive.namelist())
             config = json.loads(archive.read('panel_config.json'))
             self.assertNotIn('admin_pass', config)

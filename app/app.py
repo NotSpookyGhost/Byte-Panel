@@ -11,6 +11,8 @@ import signal
 import shutil
 import zipfile
 import sqlite3
+import tempfile
+from pathlib import Path
 import hashlib
 import urllib.request
 from contextlib import closing, contextmanager
@@ -29,6 +31,7 @@ from panel_accounts import grants, session_grants
 from minecraft_releases import MinecraftReleases, DOWNLOAD_HEADERS, java_path
 from server_backups import ServerBackups, BackupBusy, BackupCompletedError, backup_error, backup_server_key
 from server_backups import normalize_backup_exclusions
+from restic_store import ResticError, reference
 from backup_lifecycle import BackupLifecycle
 from server_automation import ServerAutomation
 from server_icon import server_icon_path, save_server_icon, ServerIconError
@@ -87,6 +90,9 @@ DATA_DIR = os.getenv('PANEL_DATA_DIR', '/data')
 BRANDING_DIR = os.path.join(DATA_DIR, "branding")
 SERVER_DIR = os.path.join(DATA_DIR, "server")
 os.makedirs(BRANDING_DIR, exist_ok=True)
+PREVIOUS_SERVER = Path(DATA_DIR) / '.previous-server'
+if PREVIOUS_SERVER.exists() and not Path(SERVER_DIR).exists():
+    os.replace(PREVIOUS_SERVER, SERVER_DIR)
 os.makedirs(SERVER_DIR, exist_ok=True)
 os.makedirs(os.path.join(DATA_DIR, "logs"), exist_ok=True)
 
@@ -226,7 +232,8 @@ security = PanelSecurity(app, DATA_DIR, load_config, save_config, lambda: get_cu
 backup_lifecycle = BackupLifecycle(lambda: MINECRAFT_PROCESS, lambda: MINECRAFT_LOG_THREAD,
                                    load_config, save_config, lambda: start_minecraft_server(), app.logger,
                                    before_stop=lambda: server_automation.stop())
-server_backups = ServerBackups(DATA_DIR, SERVER_DIR, load_config, app.logger, backup_lifecycle.offline)
+server_backups = ServerBackups(DATA_DIR, SERVER_DIR, load_config, app.logger, backup_lifecycle.offline,
+                               scope=lambda: load_config().get("backup_lineage") or security.store.scope())
 server_automation = ServerAutomation(load_config, lambda: start_minecraft_server(automatic=True),
                                      lambda: MINECRAFT_PROCESS, lambda: MINECRAFT_LOG_THREAD,
                                      server_backups.exclusive, app.logger)
@@ -869,7 +876,8 @@ def checked_backup_path(server_name, filename):
             abort(400, description='Invalid backup path.')
     root = os.path.realpath(os.path.join(DATA_DIR, 'backups'))
     path = os.path.realpath(os.path.join(root, server_name, filename))
-    if os.path.commonpath([root, path]) != root or not filename.lower().endswith('.zip'):
+    if (os.path.commonpath([root, path]) != root or os.path.normcase(path) != os.path.normcase(os.path.join(root, server_name, filename))
+            or not filename.lower().endswith(('.zip', '.restic'))):
         abort(400, description='Invalid backup path.')
     return path
 
@@ -898,11 +906,24 @@ def api_download_backup(server_name, filename):
     safe_name = os.path.basename(server_name)
     safe_file = os.path.basename(filename)
     path = checked_backup_path(server_name, filename)
+    if os.path.isfile(path) and path.endswith('.restic'):
+        stream = tempfile.TemporaryFile(dir=DATA_DIR)
+        try:
+            with server_backups.exclusive():
+                server_backups.restic.export(Path(path), stream)
+            response = send_file(stream, as_attachment=True, download_name=Path(safe_file).stem + '.zip',
+                                 mimetype='application/zip', conditional=False)
+            response.content_length = os.fstat(stream.fileno()).st_size
+            return response
+        except BaseException:
+            stream.close()
+            raise
     if os.path.exists(path):
         return send_file(path, as_attachment=True, download_name=safe_file)
     return "Not Found", 404
 
 @app.route('/api/backup/delete', methods=['POST'])
+@exclusive_server_files
 def api_delete_backup():
     payload = request.get_json() or {}
     server_name = payload.get('server_name')
@@ -913,9 +934,41 @@ def api_delete_backup():
         safe_file = os.path.basename(filename)
         path = checked_backup_path(server_name, filename)
         if os.path.exists(path):
-            os.remove(path)
+            if path.endswith('.restic'):
+                server_backups.restic.delete(Path(path))
+            else:
+                os.remove(path)
             return jsonify({"status": "success"})
     return jsonify({"error": "Failed to delete"}), 400
+
+def replace_server_tree(replacement):
+    # Stage and verify first. Keep the old tree until both directory renames succeed.
+    live = Path(SERVER_DIR)
+    previous = PREVIOUS_SERVER
+    if previous.exists():
+        raise ResticError('A previous server tree is still in /data/.previous-server. Check it before another restore.')
+    os.replace(live, previous)
+    try:
+        os.replace(replacement, live)
+    except BaseException:
+        os.replace(previous, live)
+        raise
+    addon_updates.reset()
+    try:
+        shutil.rmtree(previous)
+    except OSError:
+        app.logger.exception('Server replaced, but cleanup of /data/.previous-server failed')
+
+
+@app.errorhandler(ResticError)
+def restic_error(error):
+    return jsonify(status='error', error=str(error), message=str(error)), 500
+
+
+@app.errorhandler(BackupBusy)
+def backup_busy_error(error):
+    return jsonify(status='error', error=str(error), message=str(error)), 409
+
 
 @app.route('/api/backup/restore', methods=['POST'])
 @exclusive_server_files
@@ -936,8 +989,6 @@ def api_restore_backup():
     
     if not os.path.exists(path):
         return jsonify({"error": "File not found"}), 404
-    validate_server_zip(path)
-        
     global MINECRAFT_PROCESS
     config = load_config()
     if ((MINECRAFT_PROCESS and MINECRAFT_PROCESS.poll() is None) or
@@ -945,19 +996,25 @@ def api_restore_backup():
             (MINECRAFT_LOG_THREAD and MINECRAFT_LOG_THREAD.is_alive())):
         return jsonify(error='Stop Minecraft and wait until shutdown finishes before restoring a backup.'), 409
         
+    current_group = server_backups.restic.group(backup_server_key(config.get('server_name'))).name
+    lineage = None
+    if path.endswith('.restic'):
+        lineage = server_backups.restic.owner(Path(path).parent)
+    elif safe_name == current_group:
+        lineage = config.get('backup_lineage') or security.store.scope()
     server_automation.stop()
-    # Wipe current server directory
-    addon_updates.reset()
-    for f in os.listdir(SERVER_DIR):
-        f_path = os.path.join(SERVER_DIR, f)
-        try:
-            if os.path.isdir(f_path): shutil.rmtree(f_path)
-            else: os.unlink(f_path)
-        except: pass
-        
-    with zipfile.ZipFile(path, 'r') as zip_ref:
-        zip_ref.extractall(SERVER_DIR)
-        
+    with tempfile.TemporaryDirectory(dir=DATA_DIR, prefix='.restore-') as temporary:
+        stage = Path(temporary)
+        if path.endswith('.restic'):
+            replacement = server_backups.restic.restore(Path(path), stage)
+        else:
+            validate_server_zip(path)
+            replacement = stage / 'server'
+            replacement.mkdir()
+            with zipfile.ZipFile(path) as archive:
+                archive.extractall(replacement)
+        replace_server_tree(replacement)
+
     # Extract player_history.json if present
     imported_history = os.path.join(SERVER_DIR, "player_history.json")
     if os.path.exists(imported_history):
@@ -987,7 +1044,11 @@ def api_restore_backup():
 
     # A restored world must be explicitly opted back into public map hosting.
     restored_config = load_config()
-    if safe_name != backup_server_key(config.get('server_name')):
+    if lineage:
+        restored_config['backup_lineage'] = lineage
+    else:
+        restored_config.pop('backup_lineage', None)
+    if safe_name != current_group:
         restored_config['backup_exclusions'] = []
     restored_config['bluemap_enabled'] = False
     restored_config['auto_start'] = False
@@ -1001,15 +1062,30 @@ def api_restore_backup():
 def api_list_backups():
     backups_dir = os.path.join(DATA_DIR, "backups")
     res = {}
+    storage = {}
     if os.path.exists(backups_dir):
         for srv in os.listdir(backups_dir):
             srv_path = os.path.join(backups_dir, srv)
-            if os.path.isdir(srv_path):
+            if os.path.isdir(srv_path) and not os.path.islink(srv_path):
                 files = []
+                legacy_bytes = 0
                 for f in os.listdir(srv_path):
-                    if f.endswith(".zip"):
+                    item = Path(srv_path) / f
+                    if item.is_symlink() or not item.is_file():
+                        continue
+                    if f.endswith('.restic'):
+                        try:
+                            info = reference(item)
+                            when = info['timestamp']
+                            files.append(dict(filename=f, format='restic', type='auto' if info['kind'] == 'auto' else 'manual',
+                                              date=datetime.fromtimestamp(when).strftime('%Y-%m-%d %H:%M:%S'),
+                                              timestamp=when, size=info['logical_bytes'], added=info['added_bytes']))
+                        except (OSError, ValueError, KeyError, ResticError):
+                            app.logger.exception('Invalid restic reference %s', item)
+                    elif f.endswith(".zip"):
                         # Parse date from name: server_name_YYYYMMDDHHMMSS_manual.zip
                         stat = os.stat(os.path.join(srv_path, f))
+                        legacy_bytes += stat.st_size
                         date_str = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
                         
                         btype = "manual"
@@ -1022,12 +1098,15 @@ def api_list_backups():
                             "timestamp": stat.st_mtime,
                             "size": stat.st_size
                         })
+                repo = Path(srv_path) / '.restic-repo'
+                storage[srv] = legacy_bytes + server_backups.restic.repository_bytes(repo)
                 files.sort(key=lambda x: x['timestamp'], reverse=True)
                 if files:
                     res[srv] = files
-    return jsonify({"backups": res})
+    return jsonify(backups=res, storage=storage)
 
 @app.route('/api/backup/rename', methods=['POST'])
+@exclusive_server_files
 def rename_backup():
     if not session.get('logged_in'): return jsonify({"status": "error", "message": "Unauthorized"}), 403
     
@@ -1038,10 +1117,11 @@ def rename_backup():
     if not server_name or not old_name or not new_name:
         return jsonify({"status": "error", "message": "Missing parameters"})
         
-    if not new_name.endswith(".zip"):
-        new_name += ".zip"
+    extension = '.restic' if old_name.endswith('.restic') else '.zip'
+    if not new_name.endswith(extension):
+        new_name += extension
         
-    if "_auto.zip" in old_name:
+    if "_auto.zip" in old_name or old_name.endswith('_auto.restic') or new_name.endswith('_auto.restic'):
         return jsonify({"status": "error", "message": "Cannot rename automatic backups"})
         
     if "/" in new_name or "\\" in new_name or ".." in new_name:
@@ -1071,7 +1151,7 @@ def backups_page():
         return redirect(url_for('login'))
     config = load_config()
     return render_template('backups.html', config=config, has_custom=get_custom_assets_state(),
-                           current_backup_key=backup_server_key(config.get('server_name', 'My Server')))
+                           current_backup_key=server_backups.restic.group(backup_server_key(config.get('server_name', 'My Server'))).name)
 
 @app.route('/branding-assets/<filename>')
 def serve_custom_branding(filename):
@@ -1910,9 +1990,9 @@ def api_create_backup():
     try:
         if payload.get('background') is True:
             return jsonify(server_backups.start(security.store.scope(), is_restore)), 202
-        zip_path = create_backup(server_name, is_manual=True, is_restore_backup=is_restore)
-        return jsonify({"status": "success", "file": os.path.basename(zip_path),
-                        "server_key": os.path.basename(os.path.dirname(zip_path))})
+        backup_path = create_backup(server_name, is_manual=True, is_restore_backup=is_restore)
+        return jsonify({"status": "success", "file": os.path.basename(backup_path),
+                        "server_key": os.path.basename(os.path.dirname(backup_path))})
     except BackupBusy as e:
         return jsonify(status='error', message=str(e)), 409
     except BackupCompletedError as e:
@@ -1992,6 +2072,7 @@ def purge_server():
     # Reset internal panel ecosystem configuration
     config = load_config()
     config['is_setup'] = False
+    config.pop('backup_lineage', None)
     config['bluemap_enabled'] = False
     config['backup_exclusions'] = []
     config['auto_start'] = False
@@ -2020,70 +2101,47 @@ def purge_server():
 @exclusive_server_files
 def import_server():
     global MINECRAFT_PROCESS
-    temp_zip = os.path.join(DATA_DIR, "temp_import.zip")
-    
-    if 'import_backup_path' in request.form:
-        backup_path = request.form['import_backup_path']
-        # backup_path is passed as 'serverName/filename.zip'
-        backup_root = os.path.realpath(os.path.join(DATA_DIR, 'backups'))
-        full_backup_path = os.path.realpath(os.path.join(backup_root, backup_path))
-        if os.path.commonpath([backup_root, full_backup_path]) != backup_root or not full_backup_path.lower().endswith('.zip'):
-            return jsonify(error='Invalid backup path.'), 400
-        if not os.path.exists(full_backup_path):
-            return jsonify({"error": "Backup file not found"}), 404
-        shutil.copy2(full_backup_path, temp_zip)
-    else:
-        if 'import_zip' not in request.files:
-            return jsonify({"error": "No file uploaded"}), 400
-            
-        file = request.files['import_zip']
-        if file.filename == '':
-            return jsonify({"error": "No file selected"}), 400
-            
-        file.save(temp_zip)
-    
-    validate_server_zip(temp_zip)
-    needs_manual = False
-    try:
-        with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-            if "ServerEngineInfo" not in zip_ref.namelist():
-                if not request.form.get('manual_mc_version'):
-                    needs_manual = True
-    except:
-        pass
-        
-    if needs_manual:
-        os.remove(temp_zip)
-        return jsonify({"missing_engine_info": True})
-        
-    server_automation.stop()
-    process, reader = MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
-    pid = load_config().get('server_pid')
-    try:
-        if ((process and process.poll() is None) or (pid and psutil.pid_exists(pid))):
-            if not stop_minecraft_server():
-                return jsonify(error='Unable to stop Minecraft. No server files were replaced.'), 409
-        wait_for_minecraft_shutdown(process, reader)
-    except (RuntimeError, OSError, psutil.Error) as error:
-        return jsonify(error=str(error)), 409
+    with tempfile.TemporaryDirectory(dir=DATA_DIR, prefix='.import-') as temporary:
+        stage = Path(temporary)
+        if 'import_backup_path' in request.form:
+            parts = request.form['import_backup_path'].split('/')
+            if len(parts) != 2:
+                return jsonify(error='Invalid backup path.'), 400
+            source = Path(checked_backup_path(*parts))
+            if not source.is_file():
+                return jsonify(error='Backup file not found.'), 404
+        else:
+            upload = request.files.get('import_zip')
+            if not upload or not upload.filename:
+                return jsonify(error='Choose a server ZIP to import.'), 400
+            source = stage / 'upload.zip'
+            upload.save(source)
 
-    # Wipe current server files only after shutdown and log activity are complete.
-    addon_updates.reset()
-    for filename in os.listdir(SERVER_DIR):
-        file_path = os.path.join(SERVER_DIR, filename)
+        if source.suffix == '.restic':
+            replacement = server_backups.restic.restore(source, stage)
+        else:
+            validate_server_zip(source)
+            replacement = stage / 'server'
+            replacement.mkdir()
+            with zipfile.ZipFile(source) as archive:
+                if 'ServerEngineInfo' not in archive.namelist() and not request.form.get('manual_mc_version'):
+                    return jsonify(missing_engine_info=True)
+                archive.extractall(replacement)
+        if not (replacement / 'ServerEngineInfo').is_file() and not request.form.get('manual_mc_version'):
+            return jsonify(missing_engine_info=True)
+
+        server_automation.stop()
+        process, reader = MINECRAFT_PROCESS, MINECRAFT_LOG_THREAD
+        pid = load_config().get('server_pid')
         try:
-            if os.path.isdir(file_path): shutil.rmtree(file_path)
-            else: os.unlink(file_path)
-        except: pass
-        
-    # Extract ZIP safely
-    try:
-        with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-            zip_ref.extractall(SERVER_DIR)
-    finally:
-        if os.path.exists(temp_zip):
-            os.remove(temp_zip)
-            
+            if (process and process.poll() is None) or (pid and psutil.pid_exists(pid)):
+                if not stop_minecraft_server():
+                    return jsonify(error='Unable to stop Minecraft. No server files were replaced.'), 409
+            wait_for_minecraft_shutdown(process, reader)
+        except (RuntimeError, OSError, psutil.Error) as error:
+            return jsonify(error=str(error)), 409
+        replace_server_tree(replacement)
+
     # Auto-detect ecosystem config from zip
     imported_info = os.path.join(SERVER_DIR, "ServerEngineInfo")
     config = load_config()
@@ -2136,6 +2194,7 @@ def import_server():
     config['server_pid'] = None
     
     config['bluemap_enabled'] = False
+    config.pop('backup_lineage', None)
     # A replacement is a new server scope, never an import of old accounts.
     config['backup_exclusions'] = []
     config['auto_start'] = False

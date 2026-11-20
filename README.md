@@ -18,7 +18,7 @@ its `/data` volume.
   console command history, logs, players and server properties.
 - **Files and addons:** Full browser file manager, Paper/Purpur Plugins and
   Forge/Fabric Mods tabs, searchable configs and opt-in Modrinth updates.
-- **Backups:** Manual and scheduled ZIP backups, optional shutdown during backup,
+- **Backups:** Manual and scheduled restic snapshots, optional shutdown during backup,
   downloads, manual-backup renaming, restores and imports.
 - **Accounts:** Owner protection, administrator/custom permissions and separate
   backup creation, restore and import permissions.
@@ -167,14 +167,35 @@ patches are applied.
 
 ### Backups, imports and resets
 
-Use **Backups** to create, download or restore ZIP archives. Manual backups can
-also be renamed; automatic backup names are fixed. Names already in use cannot
-be overwritten. The active server's backups are grouped separately from other
-servers' archives.
+All new backups are encrypted restic snapshots, including initial, manual, scheduled
+and pre-restore/purge backups. Each server has its own deduplicated repository.
+The first snapshot saves the included files. Later snapshots reuse matching data.
+The backup table shows logical size and data added. The group total shows storage used.
+Existing ZIP backups remain available for download, import, rename and restore.
 
-Set scheduling and retention under **Panel Settings → Backups**. New archives
-appear after creation and verification finish. Failed creation leaves existing
-archives intact.
+Use **Backups → Download ZIP** for a portable server archive with the world,
+engine details and panel metadata. Export needs temporary space on the data volume
+for the ZIP. Restores verify a snapshot in staging before replacing the server,
+so allow space for a second copy of the restored files. Stop Minecraft before restoring.
+
+**Recovery:** Save a separate, private copy of `/data/restic/password`. Back up
+the complete `/data/backups` directory, including hidden files and the small
+`.restic` references. The password survives rebuilds and server resets on
+the same data volume. Losing every copy of the password prevents recovery.
+With the panel offline, you can inspect a repository independently using:
+
+```sh
+restic -r "/data/backups/<server-group>/.restic-repo" --password-file /data/restic/password snapshots
+```
+
+Replace `<server-group>` with the backup folder name. For a full integrity scan
+use `check --read-data` in place of `snapshots`. Restoring to an empty directory
+recovers the `server/` tree and separate portable metadata.
+
+Set scheduling and retention under **Panel Settings → Backups**. Retention removes
+old automatic snapshots after a successful backup. Manual, initial, safety and
+legacy ZIP backups are kept. Restic reclaims unreferenced data after Minecraft
+has restarted when shutdown backups are enabled.
 
 In **Panel Settings → Backups**, click **Choose files and folders**. Open a
 folder by its name and uncheck anything to leave out of future backups.
@@ -182,10 +203,10 @@ Unchecking a folder skips everything inside it, including files added later.
 Choose **Use selection**, then **Save Settings**.
 
 For BlueMap, **Exclude BlueMap renders** selects `bluemap/web/maps`. The world
-and plugin configuration stay in the ZIP. You can also edit **Excluded paths**
+and plugin configuration stay in the snapshot. You can also edit **Excluded paths**
 inside the picker for custom locations or folders that do not exist yet.
 
-Exclusions apply to newly created ZIPs, including scheduled backups and safety
+Exclusions apply to new snapshots, including scheduled backups and safety
 backups before a restore or purge. Restore replaces the server directory, so
 excluded files must be regenerated or recovered separately. For BlueMap, render
 the map again after restoring. Each filtered ZIP lists its exclusions in
@@ -193,14 +214,14 @@ the map again after restoring. Each filtered ZIP lists its exclusions in
 
 For consistent world and plugin data, enable **Shut down server during backups**
 or stop Minecraft yourself before backing up. Shutdown mode gracefully stops a
-running server, verifies the ZIP and restarts it; an already-offline server stays
+running server, records the snapshot and restarts it; an already-offline server stays
 offline. This applies to manual and scheduled backups and disconnects players;
 users with backup-creation permission can trigger that downtime. It is off by
 default and reduces snapshot inconsistency, not existing corruption.
 
 Shutdown backups abort if Minecraft cannot stop cleanly within three minutes;
 the panel does not force-kill it. After a clean stop, restart is attempted even
-if archiving fails. If restart fails, a completed ZIP is retained and the error
+if archiving fails. If restart fails, a completed backup is retained and the error
 is reported. Avoid external watchdogs or plugins that restart Minecraft during
 a shutdown backup. Start/stop/restart, console commands, settings changes, restore,
 import and purge are blocked while a backup runs. Avoid other file changes.
